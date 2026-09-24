@@ -2,7 +2,8 @@
  * Cloudflare Worker for StudE & OM Network (PW, JEE, YouTube & AI Engine)
  * Complete edge implementation with 100% parity with server.js:
  * - Physics Wallah API (Catalog, Metadata, Chapters, Teacher profiles, Syllabus & Full Schedules)
- * - YouTube Search & Playlist Scraper (Native HTML parsing, zero binary dependencies)
+ * - YouTube Playlist & Single Video Parser (Full support for modern lockupViewModel & classic playlistVideoRenderer)
+ * - YouTube Search Engine (Channel RSS + Search Scraping)
  * - AI Web Scraper & YouTube Transcript Engine (Invidious, youtube-transcript.ai, JSON-LD)
  * - DuckDuckGo Web Search with OpenGraph Thumbnails
  * - Universal CORS Proxy & Media Streaming
@@ -223,12 +224,13 @@ async function fetchVideoAttachments(batchId, subjectId, chapterId, videoId, tok
 }
 
 // ─── PW CHAPTER CONTENTS ──────────────────────────────────────────────────────
-async function fetchChapterContents(batchId, subjectId, chapterId, token) {
+async function fetchChapterContents(batchId, subjectId, chapterId, token, allowFallback = true) {
   const cacheKey = `${batchId}_${subjectId}_${chapterId}`;
   const cached = pwChapterCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.data;
 
   try {
+    // Fetch page 1 contents
     const [vRes, nRes, dRes] = await Promise.all([
       fetch(
         `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/contents?page=1&contentType=videos&tag=${encodeURIComponent(chapterId)}`,
@@ -244,9 +246,51 @@ async function fetchChapterContents(batchId, subjectId, chapterId, token) {
       ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }))
     ]);
 
-    const rawVideos = Array.isArray(vRes.data) ? vRes.data : [];
-    const rawNotes = Array.isArray(nRes.data) ? nRes.data : [];
-    const rawDpps = Array.isArray(dRes.data) ? dRes.data : [];
+    let rawVideos = Array.isArray(vRes.data) ? [...vRes.data] : [];
+    let rawNotes = Array.isArray(nRes.data) ? [...nRes.data] : [];
+    let rawDpps = Array.isArray(dRes.data) ? [...dRes.data] : [];
+
+    // If page 1 had max items (usually 20), fetch page 2 to ensure complete chapter history
+    if (rawVideos.length >= 20 || rawNotes.length >= 20 || rawDpps.length >= 20) {
+      try {
+        const [vRes2, nRes2, dRes2] = await Promise.all([
+          rawVideos.length >= 20 ? fetch(
+            `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/contents?page=2&contentType=videos&tag=${encodeURIComponent(chapterId)}`,
+            { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) }
+          ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] })) : { data: [] },
+          rawNotes.length >= 20 ? fetch(
+            `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/contents?page=2&contentType=notes&tag=${encodeURIComponent(chapterId)}`,
+            { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) }
+          ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] })) : { data: [] },
+          rawDpps.length >= 20 ? fetch(
+            `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/contents?page=2&contentType=DppNotes&tag=${encodeURIComponent(chapterId)}`,
+            { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) }
+          ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] })) : { data: [] }
+        ]);
+        if (Array.isArray(vRes2.data)) rawVideos.push(...vRes2.data);
+        if (Array.isArray(nRes2.data)) rawNotes.push(...nRes2.data);
+        if (Array.isArray(dRes2.data)) rawDpps.push(...dRes2.data);
+      } catch (p2Err) {}
+    }
+
+    // Auto-fallback: If this subjectId returned zero items, check if batch metadata has an alternative ID
+    if (allowFallback && rawVideos.length === 0 && rawNotes.length === 0 && rawDpps.length === 0) {
+      try {
+        const batchMeta = pwMetadataCache.get(batchId)?.value;
+        if (batchMeta && Array.isArray(batchMeta.subjects)) {
+          const matchSub = batchMeta.subjects.find(s => s.id === subjectId || s.subjectId === subjectId);
+          if (matchSub) {
+            const altId = matchSub.id === subjectId ? matchSub.subjectId : matchSub.id;
+            if (altId && altId !== subjectId) {
+              const altResult = await fetchChapterContents(batchId, altId, chapterId, token, false);
+              if (altResult && (altResult.totalLectures > 0 || altResult.totalNotes > 0 || altResult.totalDpps > 0)) {
+                return altResult;
+              }
+            }
+          }
+        }
+      } catch (fbErr) {}
+    }
 
     // Pre-fetch live verified PDF attachments for videos concurrently
     const videoAttachmentsMap = new Map();
@@ -405,18 +449,36 @@ async function fetchChapterContents(batchId, subjectId, chapterId, token) {
         pdfUrl,
         notesUrl,
         dppPdfUrl,
-        allNotes: atts?.notes || undefined,
-        allDpps: atts?.dpp_pdf || undefined
+        allNotes: atts?.notes || [],
+        allDpps: atts?.dpp_pdf || []
       };
     });
 
+    // Standalone Notes Integration:
+    // If a chapter has notes/PDFs not linked to any video (e.g. Formula Sheets, Mind Maps, Handwritten Notes),
+    // convert them into lecture items so they appear under both the Lectures tab and the Notes tab!
+    const standaloneNotes = notesList
+      .filter(n => !lecturesList.some(v => v.notesUrl === n.pdfUrl || v.pdfUrl === n.pdfUrl))
+      .map(n => ({
+        id: n.id,
+        title: n.title,
+        type: "lecture",
+        attachmentName: n.attachmentName || "Class Notes",
+        pdfUrl: n.pdfUrl,
+        notesUrl: n.notesUrl,
+        date: n.date,
+        allNotes: [{ topic: n.title, note: n.attachmentName || "Class Notes", pdf: n.pdfUrl }]
+      }));
+
+    const combinedLectures = [...lecturesList, ...dppsList, ...standaloneNotes];
+
     const data = {
       chapterId,
-      lectures: [...lecturesList, ...dppsList],
+      lectures: combinedLectures,
       videosOnly: lecturesList,
       notes: notesList,
       dpps: dppsList,
-      totalLectures: lecturesList.length,
+      totalLectures: lecturesList.length + standaloneNotes.length,
       totalDpps: dppsList.length,
       totalNotes: notesList.length
     };
@@ -466,14 +528,40 @@ async function fetchSubjectData(batchId, remoteSubject, token) {
         ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }))
       ]);
 
-      const rawTopics = [...(p1Res.data || []), ...(p2Res.data || [])];
+      let rawTopics = [...(p1Res.data || []), ...(p2Res.data || [])];
+
+      // If page 1 & 2 were empty, try alternative subjectId if available
+      if (rawTopics.length === 0 && remoteSubject.subjectId && remoteSubject._id && remoteSubject.subjectId !== remoteSubject._id) {
+        const altId = subjectId === remoteSubject._id ? remoteSubject.subjectId : remoteSubject._id;
+        try {
+          const altRes = await fetch(
+            `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(altId)}/topics?page=1`,
+            { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) }
+          );
+          if (altRes.ok) {
+            const altPayload = await altRes.json();
+            if (Array.isArray(altPayload.data) && altPayload.data.length > 0) {
+              rawTopics = altPayload.data;
+            }
+          }
+        } catch (e) {}
+      }
+
+      // Safe topic filtering:
+      // Filter out only empty administrative notices. Preserve ALL academic content:
+      // formula sheets, mind maps, short notes, concise summaries, and practice sheets!
       const validTopics = rawTopics.filter(topic => {
-        if (typeof topic.name !== "string") return false;
-        return !/(only\s+pdf|only\s+video|demo\s+videos?|short\s+notes|mind\s+maps?|blueprint|notice|announcement|test\s+series)/i.test(topic.name);
+        if (!topic || typeof topic.name !== "string") return false;
+        const tName = topic.name.trim();
+        if (/^(notices?|announcements?)$/i.test(tName)) return false;
+        return true;
       });
 
-      validTopics.forEach((t, idx) => {
-        const isStarted = Boolean((t.videos || 0) > 0 || (t.notes || 0) > 0 || (t.exercises || 0) > 0);
+      // Use validTopics, or fall back to rawTopics so no teacher subject is ever blank
+      const finalTopics = validTopics.length > 0 ? validTopics : rawTopics;
+
+      finalTopics.forEach((t, idx) => {
+        const isStarted = Boolean((t.videos || 0) > 0 || (t.notes || 0) > 0 || (t.exercises || 0) > 0 || (t.lectureVideos || 0) > 0);
         chapters.push({
           id: t._id || `${subjectId}-ch-${idx + 1}`,
           rawId: t._id,
@@ -486,12 +574,14 @@ async function fetchSubjectData(batchId, remoteSubject, token) {
         });
       });
 
-      const firstStartedChapter = chapters.find(c => c.isStarted);
+      // Pre-fetch contents of the first started chapter so it appears immediately
+      const firstStartedChapter = chapters.find(c => c.isStarted) || chapters[0];
       if (firstStartedChapter && firstStartedChapter.rawId) {
         const contents = await fetchChapterContents(batchId, subjectId, firstStartedChapter.rawId, token);
         firstStartedChapter.lectures = contents.lectures || [];
         if (contents.totalLectures) firstStartedChapter.videoCount = contents.totalLectures;
         if (contents.totalDpps) firstStartedChapter.dppCount = contents.totalDpps;
+        if (contents.totalNotes) firstStartedChapter.notesCount = contents.totalNotes;
       }
     } catch (err) {
       console.warn(`Failed fetching topics for subject ${subjectId}:`, err.message);
@@ -974,41 +1064,132 @@ async function handleYtSearch(q) {
   return { results: videos };
 }
 
+// Full YouTube Playlist Parser: Supports modern lockupViewModel, classic playlistVideoRenderer, and Invidious fallback
 async function scrapePlaylistHtml(ytPlaylistId) {
   const targetUrl = `https://www.youtube.com/playlist?list=${ytPlaylistId}`;
-  const response = await fetch(targetUrl, {
-    headers: BROWSER_HEADERS,
-    signal: AbortSignal.timeout(8000)
-  });
-  if (!response.ok) throw new Error("Failed to fetch playlist page");
-
-  const html = await response.text();
   let playlistName = "YouTube Playlist";
-  const nameMatch = html.match(/<meta\s+name="title"\s+content="([^"]+)"/i) || html.match(/<title>([^<]+)<\/title>/i);
-  if (nameMatch) playlistName = cleanTitle(nameMatch[1].replace(" - YouTube", ""));
-
   const tracks = [];
   const seenIds = new Set();
-  const videoRegex = /"playlistVideoRenderer"\s*:\s*\{[\s\S]*?"videoId"\s*:\s*"([a-zA-Z0-9_-]{11})"[\s\S]*?"title"\s*:\s*\{[\s\S]*?"text"\s*:\s*"([^"]+)"/g;
-  let match;
 
-  while ((match = videoRegex.exec(html)) !== null) {
-    const vId = match[1];
-    const rawTitle = match[2];
-    if (!seenIds.has(vId)) {
-      seenIds.add(vId);
-      tracks.push({
-        title: cleanTitle(rawTitle) || `YouTube Video [${vId}]`,
-        artist: playlistName,
-        thumbnail: `https://img.youtube.com/vi/${vId}/hqdefault.jpg`,
-        duration: 0,
-        youtubeId: vId,
-        streamUrl: `/api/stream?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${vId}`)}`
-      });
+  try {
+    const response = await fetch(targetUrl, {
+      headers: BROWSER_HEADERS,
+      signal: AbortSignal.timeout(8000)
+    });
+
+    if (response.ok) {
+      const html = await response.text();
+      const nameMatch = html.match(/<meta\s+name="title"\s+content="([^"]+)"/i) || html.match(/<title>([^<]+)<\/title>/i);
+      if (nameMatch) playlistName = cleanTitle(nameMatch[1].replace(" - YouTube", ""));
+
+      const start = html.indexOf("ytInitialData = ");
+      if (start !== -1) {
+        try {
+          const end = html.indexOf(";</script>", start);
+          const jsonStr = html.slice(start + 16, end !== -1 ? end : start + 500000);
+          const data = JSON.parse(jsonStr);
+
+          const pTitle = data.metadata?.playlistMetadataRenderer?.title || data.header?.playlistHeaderRenderer?.title?.simpleText;
+          if (pTitle) playlistName = cleanTitle(pTitle);
+
+          // 1. Modern YouTube: lockupViewModel items
+          const secContents = data.contents?.twoColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents;
+          if (Array.isArray(secContents)) {
+            secContents.forEach(c => {
+              const lvm = c.lockupViewModel;
+              if (lvm && lvm.contentId && !seenIds.has(lvm.contentId)) {
+                seenIds.add(lvm.contentId);
+                const title = lvm.metadata?.lockupMetadataViewModel?.title?.content || `YouTube Video [${lvm.contentId}]`;
+
+                let duration = 0;
+                try {
+                  const badgeText = lvm.contentImage?.thumbnailViewModel?.overlays?.[0]?.thumbnailBottomOverlayViewModel?.badges?.[0]?.thumbnailBadgeViewModel?.text;
+                  if (badgeText) {
+                    const parts = badgeText.split(":").map(Number);
+                    if (parts.length === 2) duration = parts[0] * 60 + parts[1];
+                    else if (parts.length === 3) duration = parts[0] * 3600 + parts[1] * 60 + parts[2];
+                  }
+                } catch (e) {}
+
+                tracks.push({
+                  title: cleanTitle(title),
+                  artist: playlistName,
+                  thumbnail: `https://img.youtube.com/vi/${lvm.contentId}/hqdefault.jpg`,
+                  duration,
+                  youtubeId: lvm.contentId,
+                  streamUrl: `/api/stream?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${lvm.contentId}`)}`
+                });
+              }
+            });
+          }
+
+          // 2. Classic YouTube: playlistVideoListRenderer
+          const plVideos = data.contents?.twoColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents?.[0]?.playlistVideoListRenderer?.contents;
+          if (Array.isArray(plVideos)) {
+            plVideos.forEach(item => {
+              const v = item.playlistVideoRenderer;
+              if (v && v.videoId && !seenIds.has(v.videoId)) {
+                seenIds.add(v.videoId);
+                tracks.push({
+                  title: cleanTitle(v.title?.runs?.[0]?.text || v.title?.simpleText || `YouTube Video [${v.videoId}]`),
+                  artist: cleanTitle(v.shortBylineText?.runs?.[0]?.text || playlistName),
+                  thumbnail: `https://img.youtube.com/vi/${v.videoId}/hqdefault.jpg`,
+                  duration: parseInt(v.lengthSeconds || "0", 10),
+                  youtubeId: v.videoId,
+                  streamUrl: `/api/stream?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${v.videoId}`)}`
+                });
+              }
+            });
+          }
+        } catch (jsonErr) {}
+      }
+    }
+  } catch (err) {}
+
+  // 3. Fallback: Invidious public mirrors (if YouTube desktop was challenged or returned empty)
+  if (tracks.length === 0) {
+    const mirrors = [
+      "https://inv.thepixora.com",
+      "https://invidious.f5.si",
+      "https://invidious.tiekoetter.com"
+    ];
+    for (const mirror of mirrors) {
+      try {
+        const iRes = await fetch(`${mirror}/api/v1/playlists/${encodeURIComponent(ytPlaylistId)}`, {
+          headers: { "User-Agent": "Mozilla/5.0" },
+          signal: AbortSignal.timeout(5000)
+        });
+        if (iRes.ok) {
+          const iData = await iRes.json();
+          if (Array.isArray(iData.videos) && iData.videos.length > 0) {
+            playlistName = iData.title || playlistName;
+            iData.videos.forEach(v => {
+              if (v.videoId && !seenIds.has(v.videoId)) {
+                seenIds.add(v.videoId);
+                tracks.push({
+                  title: cleanTitle(v.title || `YouTube Video [${v.videoId}]`),
+                  artist: cleanTitle(v.author || playlistName),
+                  thumbnail: `https://img.youtube.com/vi/${v.videoId}/hqdefault.jpg`,
+                  duration: v.lengthSeconds || 0,
+                  youtubeId: v.videoId,
+                  streamUrl: `/api/stream?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${v.videoId}`)}`
+                });
+              }
+            });
+            break;
+          }
+        }
+      } catch (e) {}
     }
   }
 
-  return { name: playlistName, tracks };
+  return {
+    type: "playlist",
+    name: playlistName,
+    thumbnail: tracks[0]?.thumbnail || "",
+    trackCount: tracks.length,
+    tracks
+  };
 }
 
 // ─── AI WEB SCRAPER & TRANSCRIPT ENGINE ───────────────────────────────────────
@@ -1296,7 +1477,10 @@ export default {
         const listId = extractListId(targetUrl) || targetUrl;
         try {
           const scraped = await scrapePlaylistHtml(listId);
-          return jsonResponse(scraped);
+          if (scraped.tracks.length > 0) {
+            return jsonResponse(scraped);
+          }
+          return jsonResponse({ error: "No tracks found in playlist or playlist is private" }, 404);
         } catch (err) {
           return jsonResponse({ error: err.message || "Playlist scrape failed" }, 500);
         }
@@ -1304,29 +1488,48 @@ export default {
 
       if (type === "yt_video") {
         const videoId = extractVideoId(targetUrl);
+        const clean = stripToVideoUrl(targetUrl);
+        let title = "YouTube Video";
+        let author = "YouTube";
+
+        // Strategy A: Noembed resolver
         try {
-          const oembed = await fetch(`https://noembed.com/embed?url=${encodeURIComponent(targetUrl)}`);
+          const oembed = await fetch(`https://noembed.com/embed?url=${encodeURIComponent(clean)}`, { signal: AbortSignal.timeout(4000) });
           if (oembed.ok) {
             const d = await oembed.json();
-            return jsonResponse({
-              type: "track",
-              youtubeId: videoId,
-              title: cleanTitle(d.title || "YouTube Video"),
-              artist: cleanTitle(d.author_name || "YouTube"),
-              thumbnail: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
-              duration: 0,
-              streamUrl: `/api/stream?url=${encodeURIComponent(targetUrl)}`
-            });
+            if (d?.title) {
+              title = cleanTitle(d.title);
+              author = cleanTitle(d.author_name || "YouTube");
+            }
           }
         } catch (e) {}
+
+        // Strategy B: Invidious resolver if title not resolved
+        if (title === "YouTube Video" && videoId) {
+          const mirrors = ["https://inv.thepixora.com", "https://invidious.f5.si"];
+          for (const m of mirrors) {
+            try {
+              const res = await fetch(`${m}/api/v1/videos/${videoId}`, { signal: AbortSignal.timeout(3000) });
+              if (res.ok) {
+                const data = await res.json();
+                if (data.title) {
+                  title = cleanTitle(data.title);
+                  author = cleanTitle(data.author || "YouTube");
+                  break;
+                }
+              }
+            } catch (e) {}
+          }
+        }
+
         return jsonResponse({
           type: "track",
           youtubeId: videoId,
-          title: "YouTube Video",
-          artist: "YouTube",
+          title,
+          artist: author,
           thumbnail: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
           duration: 0,
-          streamUrl: `/api/stream?url=${encodeURIComponent(targetUrl)}`
+          streamUrl: `/api/stream?url=${encodeURIComponent(clean)}`
         });
       }
 
@@ -1351,7 +1554,6 @@ export default {
       if (!targetUrl) return jsonResponse({ error: "url param required" }, 400);
       const vId = extractVideoId(targetUrl);
       if (vId) {
-        // Redirect or stream directly from Invidious audio stream endpoint
         return Response.redirect(`https://inv.thepixora.com/latest_version?id=${vId}&itag=140`, 302);
       }
       return jsonResponse({ error: "Unable to resolve stream source" }, 400);
