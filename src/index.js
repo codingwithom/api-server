@@ -37,7 +37,10 @@ function jsonResponse(data, status = 200, extraHeaders = {}) {
 async function getPwToken() {
   try {
     const res = await fetch(`${PW_DETAILS_ORIGIN}/generate_token.php`, {
-      headers: PW_HEADERS,
+      headers: {
+        "User-Agent": PW_HEADERS["User-Agent"],
+        "Accept": "application/json, text/plain, */*",
+      },
     });
     if (res.ok) {
       const payload = await res.json();
@@ -84,6 +87,34 @@ export default {
       });
     }
 
+    // Diagnostic endpoint to check upstream API reachability
+    if (pathname === "/api/pw-debug") {
+      const results = {};
+      try {
+        const pRes = await fetch(`${PW_OFFICIAL_API}/v3/batches/698ad3519549b300a5e1cc6a/details?type=EXPLORE_LEAD`, {
+          headers: { "User-Agent": PW_HEADERS["User-Agent"], "client-type": "WEB" },
+        });
+        results.penpencil_v3 = { status: pRes.status, ok: pRes.ok };
+      } catch (e) {
+        results.penpencil_v3 = { error: e.message };
+      }
+
+      try {
+        const vRes = await fetch(`${PW_DETAILS_ORIGIN}/generate_token.php`, {
+          headers: { "User-Agent": PW_HEADERS["User-Agent"] },
+        });
+        results.vidcloud_token = { status: vRes.status, ok: vRes.ok };
+      } catch (e) {
+        results.vidcloud_token = { error: e.message };
+      }
+
+      return jsonResponse({
+        timestamp: new Date().toISOString(),
+        worker_edge: "active",
+        upstreams: results,
+      });
+    }
+
     // 2. PW Batch Catalog
     if (pathname === "/api/pw-catalog") {
       try {
@@ -105,26 +136,61 @@ export default {
 
       try {
         let detailsPayload = null;
-        let lastError = "";
+        const candidateErrors = [];
 
-        for (const host of [PW_DETAILS_ORIGIN, PW_OFFICIAL_API]) {
+        const candidates = [
+          // 1. Official PW PenPencil API (Fast & direct on AWS CloudFront - no Cloudflare Bot WAF)
+          {
+            name: "penpencil-v3",
+            url: `${PW_OFFICIAL_API}/v3/batches/${encodeURIComponent(batchId)}/details?type=EXPLORE_LEAD`,
+            headers: {
+              "User-Agent": PW_HEADERS["User-Agent"],
+              "Accept": "application/json, text/plain, */*",
+              "client-type": "WEB",
+            },
+          },
+          // 2. Vidcloud Explore Lead Proxy
+          {
+            name: "vidcloud-v3",
+            url: `${PW_DETAILS_ORIGIN}/api/v3/batches/${encodeURIComponent(batchId)}/details?type=EXPLORE_LEAD`,
+            headers: PW_HEADERS,
+          },
+          // 3. Alternative Penpencil path
+          {
+            name: "penpencil-api-v3",
+            url: `${PW_OFFICIAL_API}/api/v3/batches/${encodeURIComponent(batchId)}/details?type=EXPLORE_LEAD`,
+            headers: {
+              "User-Agent": PW_HEADERS["User-Agent"],
+              "Accept": "application/json, text/plain, */*",
+              "client-type": "WEB",
+            },
+          },
+        ];
+
+        for (const candidate of candidates) {
           try {
-            const res = await fetch(`${host}/api/v3/batches/${encodeURIComponent(batchId)}/details?type=EXPLORE_LEAD`, {
-              headers: PW_HEADERS,
-            });
+            const res = await fetch(candidate.url, { headers: candidate.headers });
             if (res.ok) {
-              detailsPayload = await res.json();
-              if (detailsPayload && (detailsPayload.data || detailsPayload.subjects)) break;
+              const payload = await res.json();
+              if (payload && (payload.data || payload.subjects)) {
+                detailsPayload = payload;
+                break;
+              } else {
+                candidateErrors.push(`${candidate.name}: empty payload`);
+              }
             } else {
-              lastError = `${host} status ${res.status}`;
+              candidateErrors.push(`${candidate.name} status ${res.status}`);
             }
           } catch (e) {
-            lastError = `${host}: ${e.message}`;
+            candidateErrors.push(`${candidate.name}: ${e.message}`);
           }
         }
 
         if (!detailsPayload) {
-          return jsonResponse({ error: "Batch details unavailable from PW API", details: lastError }, 502);
+          return jsonResponse({
+            error: "Batch details unavailable from PW API",
+            details: candidateErrors.join(", ")
+          }, 502);
         }
 
         const data = detailsPayload.data || detailsPayload;
