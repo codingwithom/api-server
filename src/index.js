@@ -38,7 +38,6 @@ async function getPwToken() {
   try {
     const res = await fetch(`${PW_DETAILS_ORIGIN}/generate_token.php`, {
       headers: PW_HEADERS,
-      cf: { cacheTtl: 3600, cacheEverything: true },
     });
     if (res.ok) {
       const payload = await res.json();
@@ -90,7 +89,6 @@ export default {
       try {
         const catRes = await fetch(PW_CATALOG_URL, {
           headers: { "User-Agent": PW_HEADERS["User-Agent"], Accept: "application/json" },
-          cf: { cacheTtl: 1800, cacheEverything: true },
         });
         if (!catRes.ok) throw new Error(`Catalog returned ${catRes.status}`);
         const data = await catRes.json();
@@ -107,21 +105,26 @@ export default {
 
       try {
         let detailsPayload = null;
+        let lastError = "";
+
         for (const host of [PW_DETAILS_ORIGIN, PW_OFFICIAL_API]) {
           try {
             const res = await fetch(`${host}/api/v3/batches/${encodeURIComponent(batchId)}/details?type=EXPLORE_LEAD`, {
               headers: PW_HEADERS,
-              cf: { cacheTtl: 3600, cacheEverything: true },
             });
             if (res.ok) {
               detailsPayload = await res.json();
               if (detailsPayload && (detailsPayload.data || detailsPayload.subjects)) break;
+            } else {
+              lastError = `${host} status ${res.status}`;
             }
-          } catch (e) {}
+          } catch (e) {
+            lastError = `${host}: ${e.message}`;
+          }
         }
 
         if (!detailsPayload) {
-          return jsonResponse({ error: "Batch details unavailable from PW API" }, 502);
+          return jsonResponse({ error: "Batch details unavailable from PW API", details: lastError }, 502);
         }
 
         const data = detailsPayload.data || detailsPayload;
@@ -153,12 +156,10 @@ export default {
               try {
                 const [p1Res, p2Res] = await Promise.all([
                   fetch(`${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/topics?page=1`, {
-                    headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` },
-                    cf: { cacheTtl: 1800, cacheEverything: true },
+                    headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }
                   }).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] })),
                   fetch(`${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/topics?page=2`, {
-                    headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` },
-                    cf: { cacheTtl: 1800, cacheEverything: true },
+                    headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }
                   }).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }))
                 ]);
 
@@ -233,16 +234,13 @@ export default {
         const token = await getPwToken();
         const [vRes, nRes, dRes] = await Promise.all([
           fetch(`${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/contents?page=1&contentType=videos&tag=${encodeURIComponent(chapterId)}`, {
-            headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` },
-            cf: { cacheTtl: 1800, cacheEverything: true },
+            headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }
           }).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] })),
           fetch(`${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/contents?page=1&contentType=notes&tag=${encodeURIComponent(chapterId)}`, {
-            headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` },
-            cf: { cacheTtl: 1800, cacheEverything: true },
+            headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }
           }).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] })),
           fetch(`${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/contents?page=1&contentType=DppNotes&tag=${encodeURIComponent(chapterId)}`, {
-            headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` },
-            cf: { cacheTtl: 1800, cacheEverything: true },
+            headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }
           }).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }))
         ]);
 
@@ -307,8 +305,7 @@ export default {
 
         if (token) {
           const wsRes = await fetch(`${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/weekly-schedules?batchId=${encodeURIComponent(batchId)}&startDate=${encodeURIComponent(date)}&endDate=${encodeURIComponent(date)}&page=1`, {
-            headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` },
-            cf: { cacheTtl: 600, cacheEverything: true },
+            headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }
           });
           if (wsRes.ok) {
             const payload = await wsRes.json();
