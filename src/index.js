@@ -23,6 +23,66 @@ const PW_DETAILS_ORIGIN = "https://vidcloud.eu.org";
 const PW_OFFICIAL_API = "https://api.penpencil.co";
 const PW_CATALOG_URL = "https://studystark.github.io/batches/batches.json";
 
+const POPULAR_PW_BATCHES = [
+  {
+    batch_id: "698ad3519549b300a5e1cc6a",
+    name: "Arjuna JEE 2027",
+    byName: "For Class 11 IIT-JEE Aspirants",
+    exam: "IIT-JEE",
+    class: "11",
+    language: "Hinglish",
+    photo: "https://static.pw.live/5eb393ee95fab7468a79d189/ADMIN/bb464a1b-1525-48df-8c4e-a7e607038bf2.jpeg"
+  },
+  {
+    batch_id: "664cb3d34b4c100018eb7814",
+    name: "Lakshya JEE 2026",
+    byName: "For Class 12 IIT-JEE Aspirants",
+    exam: "IIT-JEE",
+    class: "12",
+    language: "Hinglish"
+  },
+  {
+    batch_id: "660144f808baec001824efec",
+    name: "Prayas JEE 2025 / 2026",
+    byName: "For Dropper / Repeater IIT-JEE Aspirants",
+    exam: "IIT-JEE",
+    class: "13",
+    language: "Hinglish"
+  },
+  {
+    batch_id: "664ca7bc354afd415fa0808a",
+    name: "Arjuna NEET 2027",
+    byName: "For Class 11 NEET Aspirants",
+    exam: "NEET",
+    class: "11",
+    language: "Hinglish"
+  },
+  {
+    batch_id: "664cb4325a74070018d9db90",
+    name: "Lakshya NEET 2026",
+    byName: "For Class 12 NEET Aspirants",
+    exam: "NEET",
+    class: "12",
+    language: "Hinglish"
+  },
+  {
+    batch_id: "6630f9a2dbb730001859cff2",
+    name: "Yakeen NEET 2025 / 2026",
+    byName: "For Dropper / Repeater NEET Aspirants",
+    exam: "NEET",
+    class: "13",
+    language: "Hinglish"
+  },
+  {
+    batch_id: "6a6992d0cfd4382606180b15",
+    name: "NSEA 2026",
+    byName: "Targeted Batch for NSEA 2026 Aspirants",
+    exam: "OLYMPIAD",
+    class: "12",
+    language: "Hinglish"
+  }
+];
+
 const FALLBACK_PW_COOKIES = "access_token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpYXQiOjE3ODg2NjYyODMsImV4cCI6MTc4OTI3MTA4My4wMjUsImRhdGEiOnsiX2lkIjoiNjhkZGZiZjAwNTkwMWE2ZDlhMTI5ZGI1IiwidXNlcm5hbWUiOiI3OTA2NTIxODQxIn19.f2XuaPhdG1vbiI6yjFawQioI1IZWiZtOTN1ZTk1ZmFinZQ2OGE3OWQxODk1LCJ3ZWJzaXRlIjoiaG95c21jc3dhbGxhc5Jb201LCJvYWI1IjoiUGh5c2ljc3dhbGxhc39LCJyb2xlcyI6WyI1YjI3YmQ5NjU4NDJmOTUwYTc3OGM2ZWYiXSwiY291bnRyeUdyb3VwIjoiSU4iLCJvbmVsb2xlcyI6W10sInR5cGUiOiJVU0VSIn0sImp0aSI6Ijd6dG5rbE0zUmQyMmE2e1Q2cUZNT1FfNjhkZGZiZjAwNTkwMWE3ZDlhMTI5ZGI1In0.OEVxivd2_L6zfrZLLTOFYPoiQsmb1t_7m889gyX5oeE; PHPSESSID=14dvi03b58pug1144tioqed92b; stark_cid=f96ea578454552575ec787e1e7c9eec200ea202aae6ae1daaadbd245d3d307b79; stark_jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJrzkiOiI1OUQtQkEyLTgyRS0zRDItQTk2Iiwiy2xpZW50X2lkIjoiZ2kzZWE1Nzg0NTQ1NTI1NzVlYzc4N2UxZTdjOWVlYzIwMGVhMjAyYWF1NmF1MWRhYWFkYmQyNDVkM2QzMDdiNzlSISImlhdCI6MTc5MDMxNjUzNSIwZXhwIjoxNzkxNDAYOTM1fQ.gieu1Snd5WgiM8VByojkwmuq0rcNfON52CkuEyzFofs";
 const FALLBACK_PW_TOKEN = "Qd2wfhzRoi5eQdoITwpbNKPMdMTNSs37YUjvj0rSb5sNyhMiNwdYRCmgiTbUdxAibU3m+ETsvfr08WHlOIw8V5Ae12IwN5xSWTknnXkHL5d+PK4xeNliyrKg7RyjrjaY9VM66AUNFORT6DY8AjgpXFtE86unYfEN0OK+jxrIAhhZEFa36XVws4yLUz4Espb9yIioPcpKeK2n3w1yZISAFs0mBdsfONwC7O9scHh9lnzjUr15GeJAPvvIKgivZ9NMLCOFEuwpXq45phXv8/pO3rEcWj/jtQdStmxbKDuxFU6LDY2CKN4A8veji9rjzZhsle+M4tlc+Q0xdoleA25zrzUJV82iyS1lkqe+VrMDMnLYa3uCq3Zc0Zn/WN2enQLT2XSqyquUk7yO3gcBt6n4pgO3tqVfLSjlZewb2qKi9hNo6gMkit71lsTcYn3dlVjE9DJMoNy0P8ua6EsjCy7YA4tM0vFOGclR0+JUTdXloIgyeM46jKxGajA2vQh8yIN7dDLxWc6rN5lgssWLtTN3j3/QJBTgJXI7eoyxB+3bBRDjAlBXd+tZvmJeE28YCp3Jop4ZEVMC6tRzi0u0KmZqnHmAZdP95aJX43MLb9aZXI0fIOOX/ilqBHSt53z3bP2rlPixNReYbGNt20TwL+E5m3OxQDT5dWmyBfD2dd41moLeTN3Ls8zzKXHooEID9rHXfYUVqqTanm2IjZ5qDIBPaRFomxkDC9vt50BtWFf/VyKRS2WswbwHdpv3DD3BM+qwPLH9QK87mpkWA61ODhbkVR364tfNYOLWxcXFn5sosEo=";
 
@@ -1701,21 +1761,65 @@ export default {
       });
     }
 
-    // 3. PW Catalog
+    // 3. PW Catalog with search, filter, and fallback
     if (pathname === "/api/pw-catalog") {
-      if (pwCatalogCache.data && pwCatalogCache.expiresAt > Date.now()) {
-        return jsonResponse(pwCatalogCache.data, 200, { "Cache-Control": "public, max-age=1800" });
+      const searchQuery = (url.searchParams.get("search") || "").trim().toLowerCase();
+      const examQuery = (url.searchParams.get("exam") || "").trim().toLowerCase();
+      const classQuery = (url.searchParams.get("class") || "").trim().toLowerCase();
+      const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") || "50", 10), 1), 200);
+      const wantAll = url.searchParams.get("all") === "true";
+
+      let catalogList = [];
+      if (pwCatalogCache.data && Array.isArray(pwCatalogCache.data.data)) {
+        catalogList = pwCatalogCache.data.data;
+      } else {
+        try {
+          const res = await fetch(PW_CATALOG_URL, { headers: PW_HEADERS, signal: AbortSignal.timeout(12000) });
+          if (res.ok) {
+            const data = await res.json();
+            pwCatalogCache = { data, expiresAt: Date.now() + PW_CATALOG_TTL };
+            catalogList = Array.isArray(data.data) ? data.data : (Array.isArray(data) ? data : []);
+          }
+        } catch (err) {}
       }
-      try {
-        const res = await fetch(PW_CATALOG_URL, { headers: PW_HEADERS, signal: AbortSignal.timeout(12000) });
-        if (res.ok) {
-          const data = await res.json();
-          pwCatalogCache = { data, expiresAt: Date.now() + PW_CATALOG_TTL };
-          return jsonResponse(data, 200, { "Cache-Control": "public, max-age=1800" });
-        }
-      } catch (err) {}
-      if (pwCatalogCache.data) return jsonResponse(pwCatalogCache.data);
-      return jsonResponse({ error: "PW catalog temporarily unavailable" }, 502);
+
+      if (catalogList.length === 0 && pwCatalogCache.data) {
+        catalogList = Array.isArray(pwCatalogCache.data.data) ? pwCatalogCache.data.data : [];
+      }
+
+      if (catalogList.length === 0 && Array.isArray(POPULAR_PW_BATCHES)) {
+        catalogList = [...POPULAR_PW_BATCHES];
+      }
+
+      if (wantAll && !searchQuery && !examQuery && !classQuery) {
+        return jsonResponse({ success: true, count: catalogList.length, data: catalogList }, 200, { "Cache-Control": "public, max-age=1800" });
+      }
+
+      let filtered = catalogList;
+      if (examQuery) {
+        filtered = filtered.filter(b => b.exam && b.exam.toLowerCase().includes(examQuery));
+      }
+      if (classQuery) {
+        filtered = filtered.filter(b => b.class && String(b.class).toLowerCase() === classQuery);
+      }
+      if (searchQuery) {
+        const tokens = searchQuery.split(/\s+/).filter(Boolean);
+        filtered = filtered.filter(b => {
+          const bName = (b.name || "").toLowerCase();
+          const bByName = (b.byName || "").toLowerCase();
+          const bExam = (b.exam || "").toLowerCase();
+          const bClass = (b.class ? String(b.class) : "").toLowerCase();
+          const bId = (b.batch_id || b.id || "").toLowerCase();
+          const text = `${bName} ${bByName} ${bExam} ${bClass} ${bId}`;
+          return tokens.every(tok => text.includes(tok));
+        });
+      }
+
+      return jsonResponse({
+        success: true,
+        total: filtered.length,
+        data: filtered.slice(0, limit)
+      }, 200, { "Cache-Control": "public, max-age=600" });
     }
 
     // 4. PW Metadata
