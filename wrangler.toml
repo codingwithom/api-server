@@ -1,4 +1,4 @@
-name = "api"
+name = "apis"
 main = "src/index.js"
 compatibility_date = "2024-09-24"
 
