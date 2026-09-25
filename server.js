@@ -1041,6 +1041,27 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
       } catch (err) {}
     }
 
+    // 3. Official PW API Fallback: Fetch free-schedule from api.penpencil.co (Public, reliable)
+    if (rawItems.length === 0) {
+      try {
+        const ppRes = await fetch(
+          `${PW_OFFICIAL_API}/v3/public/batch-service/batch-subject-schedules/${encodeURIComponent(batchId)}/free-schedule`,
+          {
+            headers: {
+              "User-Agent": PW_HEADERS["User-Agent"],
+              "client-id": "5eb393ee95fab7468a79d189",
+              "client-type": "WEB"
+            },
+            signal: AbortSignal.timeout(9000)
+          }
+        ).then(r => r.ok ? r.json() : null).catch(() => null);
+
+        if (ppRes && Array.isArray(ppRes.data) && ppRes.data.length > 0) {
+          rawItems.push(...ppRes.data);
+        }
+      } catch (err) {}
+    }
+
     // Deduplicate items by _id
     const seenRawIds = new Set();
     const uniqueRawItems = rawItems.filter(item => {

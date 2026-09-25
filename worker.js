@@ -302,18 +302,15 @@ async function fetchChapterContents(batchId, subjectId, chapterId, token, allowF
       } catch (fbErr) {}
     }
 
-    // Pre-fetch live verified PDF attachments for videos concurrently
+    // Pre-fetch live verified PDF attachments for candidates (strict limit of 2 to protect Worker subrequest limits)
     const videoAttachmentsMap = new Map();
-    for (let i = 0; i < rawVideos.length; i += 6) {
-      const chunk = rawVideos.slice(i, i + 6);
-      await Promise.all(
-        chunk.map(async (v) => {
-          if (!v._id) return;
-          const atts = await fetchVideoAttachments(batchId, subjectId, chapterId, v._id, token);
-          if (atts) videoAttachmentsMap.set(v._id, atts);
-        })
-      );
-    }
+    const candidateVideos = rawVideos.filter(v => v && v._id).slice(0, 2);
+    await Promise.all(
+      candidateVideos.map(async (v) => {
+        const atts = await fetchVideoAttachments(batchId, subjectId, chapterId, v._id, token);
+        if (atts) videoAttachmentsMap.set(v._id, atts);
+      })
+    );
 
     const notesList = [];
     rawNotes.forEach(item => {
@@ -507,9 +504,12 @@ function cleanChapterTitle(name) {
 
 function cleanBatchDescription(desc) {
   if (!desc || typeof desc !== "string") return "Live curriculum from Physics Wallah";
-  let text = desc.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, " ")
-                 .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ")
+  let text = desc.replace(/<style[\s\S]*?<\/style>/gi, " ")
+                 .replace(/<script[\s\S]*?<\/script>/gi, " ")
                  .replace(/<[^>]+>/g, " ");
+  // Remove CSS rules like { ... }
+  text = text.replace(/\{[^}]*\}/g, " ")
+             .replace(/\.[a-zA-Z0-9_-]+\s*\{[^}]*\}/g, " ");
   text = text.replace(/&nbsp;/gi, " ")
              .replace(/&amp;/gi, "&")
              .replace(/&quot;/gi, '"')
@@ -517,15 +517,13 @@ function cleanBatchDescription(desc) {
              .replace(/&lt;/gi, "<")
              .replace(/&gt;/gi, ">");
   text = text.replace(/\s+/g, " ").trim();
-  if (text.startsWith(".") || text.startsWith("{") || text.includes("display: flex") || text.includes("margin-bottom:") || text.includes(".desc-")) {
-    text = text.replace(/[^{}]*\{[^}]*\}/g, " ")
-               .replace(/\.[a-zA-Z0-9_-]+\s*\{[^}]*\}/g, " ")
-               .replace(/\s+/g, " ").trim();
+  if (text.startsWith(".") || text.startsWith("{") || text.includes("display: flex") || text.includes("margin-bottom:") || text.includes(".desc-") || text.includes("px;") || text.includes("border-") || text.includes("padding:")) {
+    return "Official Physics Wallah Live Batch Curriculum";
   }
   if (!text || text.length < 3 || text.startsWith(".") || text.startsWith("{")) {
     return "Live curriculum from Physics Wallah";
   }
-  return text;
+  return text.slice(0, 180);
 }
 
 // ─── PW SUBJECT & BATCH METADATA ──────────────────────────────────────────────
@@ -827,6 +825,27 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
       } catch (err) {}
     }
 
+    // 3. Official PW API Fallback: Fetch free-schedule from api.penpencil.co (Public, reliable, never blocked on Cloudflare Workers)
+    if (rawItems.length === 0) {
+      try {
+        const ppRes = await fetch(
+          `${PW_OFFICIAL_API}/v3/public/batch-service/batch-subject-schedules/${encodeURIComponent(batchId)}/free-schedule`,
+          {
+            headers: {
+              "User-Agent": PW_HEADERS["User-Agent"],
+              "client-id": "5eb393ee95fab7468a79d189",
+              "client-type": "WEB"
+            },
+            signal: AbortSignal.timeout(9000)
+          }
+        ).then(r => r.ok ? r.json() : null).catch(() => null);
+
+        if (ppRes && Array.isArray(ppRes.data) && ppRes.data.length > 0) {
+          rawItems.push(...ppRes.data);
+        }
+      } catch (err) {}
+    }
+
     // Deduplicate items by _id
     const seenRawIds = new Set();
     const uniqueRawItems = rawItems.filter(item => {
@@ -837,15 +856,15 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
       return true;
     });
 
-    // Pre-fetch live attachments for candidate video items (limit to 6)
+    // Pre-fetch live attachments for candidate video items (strict limit of 2)
     const scheduleAttachmentsMap = new Map();
     const candidateItems = uniqueRawItems.filter(item => {
       const details = item?.videoDetails || item?.notesDetails || item;
       return details && details._id;
-    });
+    }).slice(0, 2);
     if (token && candidateItems.length > 0) {
       await Promise.all(
-        candidateItems.slice(0, 6).map(async item => {
+        candidateItems.map(async item => {
           const details = item.videoDetails || item.notesDetails || item;
           const subId = typeof details.subjectId === "object" ? details.subjectId?._id : (typeof item.subjectId === "object" ? item.subjectId?._id : (details.subjectId || item.subjectId));
           const topicId = details.tags?.[0]?._id || item.tags?.[0]?._id || "";
@@ -1441,6 +1460,15 @@ async function handleProxy(targetUrl, request) {
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": reqUrl.origin + "/"
   };
+  if (request.headers.get("authorization")) {
+    fetchHeaders["Authorization"] = request.headers.get("authorization");
+  }
+  if (request.headers.get("client-id")) {
+    fetchHeaders["client-id"] = request.headers.get("client-id");
+  }
+  if (request.headers.get("client-type")) {
+    fetchHeaders["client-type"] = request.headers.get("client-type");
+  }
 
   const response = await fetch(targetUrl, {
     method: request.method,
