@@ -368,6 +368,8 @@ const PW_HEADERS = {
   "Accept": "application/json, text/plain, */*"
 };
 
+const FALLBACK_PW_TOKEN = "Qd2wfhzRoi5eQdoITwpbNKPMdMTNSs37YUjvj0rSb5sNyhMiNwdYRCmgiTbUdxAibU3m+ETsvfr08WHlOIw8V5Ae12IwN5xSWTknnXkHL5d+PK4xeNliyrKg7RyjrjaY9VM66AUNFORT6DY8AjgpXFtE86unYfEN0OK+jxrIAhhZEFa36XVws4yLUz4Espb9yIioPcpKeK2n3w1yZISAFs0mBdsfONwC7O9scHh9lnzjUr15GeJAPvvIKgivZ9NMLCOFEuwpXq45phXv8/pO3rEcWj/jtQdStmxbKDuxFU6LDY2CKN4A8veji9rjzZhsle+M4tlc+Q0xdoleA25zrzUJV82iyS1lkqe+VrMDMnLYa3uCq3Zc0Zn/WN2enQLT2XSqyquUk7yO3gcBt6n4pgO3tqVfLSjlZewb2qKi9hNo6gMkit71lsTcYn3dlVjE9DJMoNy0P8ua6EsjCy7YA4tM0vFOGclR0+JUTdXloIgyeM46jKxGajA2vQh8yIN7dDLxWc6rN5lgssWLpTN3j3/QJBTgJXI7eoyxB+3bBRDjAlBXd+tZvmJeE28YCp3Jop4ZEVMC6tRzi0u0KmZqnHmAZdP95aJX43MLb9aZXI0fIOOX/ilqBHSt53z3bP2rlPixNReYbGNt20TwL+E5m3OxQDT5dWmyBfD2dd41moLeTN3Ls8zzKXHooEID9rHXfYUVqqTanm2IjZ5qDIBPaRFomxkDC9vt50BtWFf/VyKRS2WswbwHdpv3DD3BM+qwPLH9QK87mpkWA61ODhbkVR364tfNYOLWxcXFn5sosEo=";
+
 async function getPwToken() {
   if (pwTokenMemoryCache.token && pwTokenMemoryCache.expiresAt > Date.now()) {
     return pwTokenMemoryCache.token;
@@ -388,12 +390,12 @@ async function getPwToken() {
     const tokenResponse = await fetch(`${PW_DETAILS_ORIGIN}/generate_token.php`, {
       headers: PW_HEADERS,
       cache: "no-store",
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(12000),
     });
     if (tokenResponse.ok) {
       const tokenPayload = await tokenResponse.json();
       const token = tokenPayload.access_token || tokenPayload.token;
-      if (token) {
+      if (token && typeof token === "string" && token.length > 20) {
         pwTokenMemoryCache = { token, expiresAt: Date.now() + 60 * 60 * 1000 };
         try {
           const fs = await import("fs");
@@ -403,11 +405,15 @@ async function getPwToken() {
       }
     }
   } catch (err) {
-    console.warn("PW generate_token error, checking memory cache:", err.message);
+    console.warn("PW generate_token error, using fallback token:", err.message);
   }
 
   if (pwTokenMemoryCache.token) return pwTokenMemoryCache.token;
-  throw new Error("PW metadata token is currently unavailable");
+  if (FALLBACK_PW_TOKEN) {
+    pwTokenMemoryCache = { token: FALLBACK_PW_TOKEN, expiresAt: Date.now() + 60 * 60 * 1000 };
+    return FALLBACK_PW_TOKEN;
+  }
+  return "";
 }
 
 function extractPdfUrl(att) {
@@ -421,6 +427,14 @@ function extractPdfUrl(att) {
   if (typeof att.url === "string" && /^https?:\/\//i.test(att.url.trim()) && /\.pdf(?:[?#]|$)/i.test(att.url.trim())) return att.url.trim();
   if (typeof att.fileUrl === "string" && /^https?:\/\//i.test(att.fileUrl.trim()) && /\.pdf(?:[?#]|$)/i.test(att.fileUrl.trim())) return att.fileUrl.trim();
   if (typeof att.link === "string" && /^https?:\/\//i.test(att.link.trim()) && /\.pdf(?:[?#]|$)/i.test(att.link.trim())) return att.link.trim();
+
+  // If key is empty but baseUrl and name or _id exist
+  if (typeof att._id === "string" && att._id.length > 10 && typeof att.baseUrl === "string") {
+    const bUrl = att.baseUrl.endsWith("/") ? att.baseUrl : `${att.baseUrl}/`;
+    if (typeof att.name === "string" && att.name.endsWith(".pdf")) {
+      return `${bUrl}${encodeURIComponent(att.name)}`;
+    }
+  }
   return undefined;
 }
 
@@ -663,6 +677,34 @@ async function fetchChapterContents(batchId, subjectId, chapterId, token) {
   }
 }
 
+function cleanChapterTitle(name) {
+  if (!name || typeof name !== "string") return "Chapter";
+  return name.trim();
+}
+
+function cleanBatchDescription(desc) {
+  if (!desc || typeof desc !== "string") return "Live curriculum from Physics Wallah";
+  let text = desc.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, " ")
+                 .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ")
+                 .replace(/<[^>]+>/g, " ");
+  text = text.replace(/&nbsp;/gi, " ")
+             .replace(/&amp;/gi, "&")
+             .replace(/&quot;/gi, '"')
+             .replace(/&#39;|&rsquo;|&lsquo;/gi, "'")
+             .replace(/&lt;/gi, "<")
+             .replace(/&gt;/gi, ">");
+  text = text.replace(/\s+/g, " ").trim();
+  if (text.startsWith(".") || text.startsWith("{") || text.includes("display: flex") || text.includes("margin-bottom:") || text.includes(".desc-")) {
+    text = text.replace(/[^{}]*\{[^}]*\}/g, " ")
+               .replace(/\.[a-zA-Z0-9_-]+\s*\{[^}]*\}/g, " ")
+               .replace(/\s+/g, " ").trim();
+  }
+  if (!text || text.length < 3 || text.startsWith(".") || text.startsWith("{")) {
+    return "Live curriculum from Physics Wallah";
+  }
+  return text;
+}
+
 // ─── FETCH SUBJECT DATA VIA OFFICIAL PW METADATA & LIVE TOPICS ───────────────
 async function fetchSubjectData(batchId, remoteSubject, token) {
   const name = typeof remoteSubject.subject === "string" ? remoteSubject.subject : "Subject";
@@ -692,66 +734,119 @@ async function fetchSubjectData(batchId, remoteSubject, token) {
     ? (primaryId === remoteSubject._id ? remoteSubject.subjectId : remoteSubject._id)
     : null;
 
-  if (primaryId && token) {
+  let rawTopics = [];
+
+  // Strategy 1: Official PenPencil v1 topics API (Fast, Reliable, Zero Token Required!)
+  if (primaryId) {
+    try {
+      const p1Res = await fetch(
+        `${PW_OFFICIAL_API}/v1/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(primaryId)}/topics?page=1`,
+        {
+          headers: { "client-type": "WEB", "User-Agent": PW_HEADERS["User-Agent"] },
+          signal: AbortSignal.timeout(8000)
+        }
+      ).then(r => r.ok ? r.json() : null).catch(() => null);
+
+      if (p1Res && Array.isArray(p1Res.data) && p1Res.data.length > 0) {
+        rawTopics = [...p1Res.data];
+        if (rawTopics.length >= 20) {
+          const p2Res = await fetch(
+            `${PW_OFFICIAL_API}/v1/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(primaryId)}/topics?page=2`,
+            {
+              headers: { "client-type": "WEB", "User-Agent": PW_HEADERS["User-Agent"] },
+              signal: AbortSignal.timeout(8000)
+            }
+          ).then(r => r.ok ? r.json() : null).catch(() => null);
+          if (p2Res && Array.isArray(p2Res.data)) {
+            rawTopics.push(...p2Res.data);
+          }
+        }
+      }
+    } catch (e) {}
+
+    // If altId exists and rawTopics is still empty, try altId on penpencil
+    if (rawTopics.length === 0 && altId) {
+      try {
+        const altRes = await fetch(
+          `${PW_OFFICIAL_API}/v1/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(altId)}/topics?page=1`,
+          {
+            headers: { "client-type": "WEB", "User-Agent": PW_HEADERS["User-Agent"] },
+            signal: AbortSignal.timeout(8000)
+          }
+        ).then(r => r.ok ? r.json() : null).catch(() => null);
+        if (altRes && Array.isArray(altRes.data) && altRes.data.length > 0) {
+          rawTopics = altRes.data;
+        }
+      } catch (e) {}
+    }
+  }
+
+  // Strategy 2: Vidcloud fallback with token if penpencil returned 0
+  if (rawTopics.length === 0 && primaryId && token) {
     try {
       const p1Res = await fetch(
         `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(primaryId)}/topics?page=1`,
-        { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(12000) }
+        { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) }
       ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }));
 
-      let rawTopics = Array.isArray(p1Res.data) ? [...p1Res.data] : [];
+      if (Array.isArray(p1Res.data)) rawTopics = [...p1Res.data];
 
       if (rawTopics.length === 0 && altId) {
-        try {
-          const altRes = await fetch(
-            `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(altId)}/topics?page=1`,
-            { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) }
-          ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }));
-          if (Array.isArray(altRes.data) && altRes.data.length > 0) {
-            rawTopics = altRes.data;
-          }
-        } catch (e) {}
+        const altRes = await fetch(
+          `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(altId)}/topics?page=1`,
+          { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) }
+        ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }));
+        if (Array.isArray(altRes.data) && altRes.data.length > 0) {
+          rawTopics = altRes.data;
+        }
       }
 
       if (rawTopics.length >= 20) {
-        try {
-          const activeId = rawTopics.length > 0 && altId && p1Res.data?.length === 0 ? altId : primaryId;
-          const p2Res = await fetch(
-            `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(activeId)}/topics?page=2`,
-            { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10000) }
-          ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }));
-          if (Array.isArray(p2Res.data) && p2Res.data.length > 0) {
-            rawTopics.push(...p2Res.data);
-          }
-        } catch (e) {}
+        const activeId = rawTopics.length > 0 && altId && p1Res.data?.length === 0 ? altId : primaryId;
+        const p2Res = await fetch(
+          `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(activeId)}/topics?page=2`,
+          { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) }
+        ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }));
+        if (Array.isArray(p2Res.data) && p2Res.data.length > 0) {
+          rawTopics.push(...p2Res.data);
+        }
       }
-
-      const validTopics = rawTopics.filter(topic => {
-        if (!topic || typeof topic.name !== "string") return false;
-        const tName = topic.name.trim();
-        if (/^(notices?|announcements?)$/i.test(tName)) return false;
-        return true;
-      });
-
-      const finalTopics = validTopics.length > 0 ? validTopics : rawTopics;
-
-      finalTopics.forEach((t, idx) => {
-        const isStarted = Boolean((t.videos || 0) > 0 || (t.notes || 0) > 0 || (t.exercises || 0) > 0 || (t.lectureVideos || 0) > 0);
-        chapters.push({
-          id: t._id || `${primaryId}-ch-${idx + 1}`,
-          rawId: t._id,
-          title: t.name.trim(),
-          videoCount: t.videos || t.lectureVideos || 0,
-          notesCount: t.notes || 0,
-          dppCount: t.exercises || 0,
-          isStarted,
-          lectures: []
-        });
-      });
     } catch (err) {
-      console.warn(`Failed fetching topics for subject ${primaryId}:`, err.message);
+      console.warn(`Vidcloud fallback failed for subject ${primaryId}:`, err.message);
     }
   }
+
+  const validTopics = rawTopics.filter(topic => {
+    if (!topic || typeof topic.name !== "string") return false;
+    const tName = topic.name.trim();
+    if (/^(notices?|announcements?)$/i.test(tName)) return false;
+    return true;
+  });
+
+  const finalTopics = validTopics.length > 0 ? validTopics : rawTopics;
+  const seenTopicIds = new Set();
+
+  finalTopics.forEach((t, idx) => {
+    const tId = t._id || `${primaryId}-ch-${idx + 1}`;
+    if (seenTopicIds.has(tId)) return;
+    seenTopicIds.add(tId);
+
+    const vCount = Number(t.videos || t.videoCount || t.videosCount || t.lectureVideos || 0);
+    const nCount = Number(t.notes || t.notesCount || 0);
+    const dCount = Number(t.exercises || t.dppCount || t.dppsCount || 0);
+    const isStarted = Boolean(vCount > 0 || nCount > 0 || dCount > 0);
+
+    chapters.push({
+      id: tId,
+      rawId: t._id,
+      title: cleanChapterTitle(t.name ? t.name.trim() : `Chapter ${idx + 1}`),
+      videoCount: vCount,
+      notesCount: nCount,
+      dppCount: dCount,
+      isStarted,
+      lectures: []
+    });
+  });
 
   return {
     id: remoteSubject._id || "",
@@ -860,7 +955,7 @@ async function fetchPwMetadata(batchId) {
     class: data.class || "",
     exam: Array.isArray(data.exam) ? data.exam.join(", ") : (data.exam || ""),
     byName: data.byName || "",
-    description: data.description || "",
+    description: cleanBatchDescription(data.description || ""),
     previewImage,
     batchPdf,
     subjects
@@ -879,16 +974,57 @@ async function fetchPwMetadata(batchId) {
 }
 
 // ─── FETCH PW SCHEDULE FROM OFFICIAL & WEEKLY SCHEDULES FEED ───────────────
-async function fetchPwSchedule(batchId, date) {
-  const cacheKey = batchId;
+async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
+  // Compute date range for month or query
+  let sDate = startDate;
+  let eDate = endDate;
+
+  if (!sDate || !eDate || !/^\d{4}-\d{2}-\d{2}$/.test(sDate) || !/^\d{4}-\d{2}-\d{2}$/.test(eDate)) {
+    let targetMonth = month;
+    if (!targetMonth || !/^\d{4}-\d{2}$/.test(targetMonth)) {
+      if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        targetMonth = date.slice(0, 7);
+      } else {
+        const istDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+        targetMonth = istDate.slice(0, 7);
+      }
+    }
+    const [y, m] = targetMonth.split("-").map(Number);
+    const lastDay = new Date(y, m, 0).getDate();
+    sDate = `${targetMonth}-01`;
+    eDate = `${targetMonth}-${String(lastDay).padStart(2, "0")}`;
+  }
+
+  const cacheKey = `${batchId}_${sDate}_${eDate}`;
   let fullSchedule = pwScheduleCache.get(cacheKey);
 
   if (!fullSchedule || fullSchedule.expiresAt <= Date.now()) {
     const rawItems = [];
     const token = await getPwToken().catch(() => "");
 
-    // 1. Try weekly-schedules feed across pages 1..3 to capture the full week and upcoming classes
+    // 1. Fetch weekly-schedules across pages 1..8 with startDate and endDate
     if (token) {
+      try {
+        const pages = [1, 2, 3, 4, 5, 6, 7, 8];
+        const pagePromises = pages.map(page =>
+          fetch(
+            `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/weekly-schedules?batchId=${encodeURIComponent(batchId)}&startDate=${encodeURIComponent(sDate)}&endDate=${encodeURIComponent(eDate)}&page=${page}`,
+            { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(12000) }
+          ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }))
+        );
+        const results = await Promise.all(pagePromises);
+        results.forEach(res => {
+          if (Array.isArray(res.data) && res.data.length > 0) {
+            rawItems.push(...res.data);
+          }
+        });
+      } catch (err) {
+        console.warn("weekly-schedules range fetch failed:", err.message);
+      }
+    }
+
+    // 2. Fallback: If range query returned empty, try fetching pages 1..3 without date filter
+    if (rawItems.length === 0 && token) {
       try {
         const pagePromises = [1, 2, 3].map(page =>
           fetch(
@@ -902,31 +1038,13 @@ async function fetchPwSchedule(batchId, date) {
             rawItems.push(...res.data);
           }
         });
-      } catch (err) {
-        console.warn("weekly-schedules fetch failed:", err.message);
-      }
-    }
-
-    // 2. Fallback: try with specific date query if pages returned empty
-    if (rawItems.length === 0 && date && token) {
-      try {
-        const wsRes = await fetch(
-          `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/weekly-schedules?batchId=${encodeURIComponent(batchId)}&startDate=${encodeURIComponent(date)}&endDate=${encodeURIComponent(date)}&page=1`,
-          { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(9000) }
-        );
-        if (wsRes.ok) {
-          const payload = await wsRes.json();
-          if (Array.isArray(payload.data) && payload.data.length > 0) {
-            rawItems.push(...payload.data);
-          }
-        }
       } catch (err) {}
     }
 
     // Deduplicate items by _id
     const seenRawIds = new Set();
     const uniqueRawItems = rawItems.filter(item => {
-      const id = item?._id || (item?.videoDetails && item.videoDetails._id);
+      const id = item?._id || (item?.videoDetails && item.videoDetails._id) || (item?.bulkScheduleDetails && item.bulkScheduleDetails._id);
       if (!id) return true;
       if (seenRawIds.has(id)) return false;
       seenRawIds.add(id);
@@ -977,7 +1095,7 @@ async function fetchPwSchedule(batchId, date) {
       const duration = details.videoDetails?.duration || details.duration || "1h 45m";
       const tag = (details.tag || item.tag || "").trim();
       const status = (details.status || item.status || "").trim();
-      const itemDate = item.date ? item.date.split("T")[0] : (start ? start.split("T")[0] : date || "");
+      const itemDate = item.date ? item.date.split("T")[0] : (details.date ? details.date.split("T")[0] : (details.startTime ? details.startTime.split("T")[0] : (start ? start.split("T")[0] : date || "")));
 
       const isLive = tag.toLowerCase() === "live" || status.toLowerCase() === "live";
       const isEnded = tag.toLowerCase() === "ended" || status.toLowerCase() === "completed" || status.toLowerCase() === "canceled" || status.toLowerCase() === "cancelled" || (!isLive && Boolean(end) && new Date(end).getTime() < Date.now());
@@ -1178,13 +1296,16 @@ app.get("/api/pw-chapter-contents", async (req, res) => {
 app.get("/api/pw-schedule", async (req, res) => {
   const batchId = typeof req.query.batchId === "string" ? req.query.batchId : "";
   const requestedDate = typeof req.query.date === "string" ? req.query.date : "";
+  const month = typeof req.query.month === "string" ? req.query.month : "";
+  const startDate = typeof req.query.startDate === "string" ? req.query.startDate : "";
+  const endDate = typeof req.query.endDate === "string" ? req.query.endDate : "";
   const istDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
   const date = /^\d{4}-\d{2}-\d{2}$/.test(requestedDate) ? requestedDate : istDate;
   if (!/^[a-zA-Z0-9_-]{8,100}$/.test(batchId)) {
     return res.status(400).json({ error: "A valid batchId is required" });
   }
   try {
-    res.json(await fetchPwSchedule(batchId, date));
+    res.json(await fetchPwSchedule(batchId, date, month, startDate, endDate));
   } catch (error) {
     res.status(502).json({ error: error.message || "PW weekly schedule unavailable" });
   }
