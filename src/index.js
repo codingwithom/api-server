@@ -1062,26 +1062,25 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
       } catch (err) {}
     }
 
-    // 3. Official PW API Fallback: Fetch free-schedule from api.penpencil.co (Public, reliable, never blocked on Cloudflare Workers)
-    if (rawItems.length === 0) {
-      try {
-        const ppRes = await fetch(
-          `${PW_OFFICIAL_API}/v3/public/batch-service/batch-subject-schedules/${encodeURIComponent(batchId)}/free-schedule`,
-          {
-            headers: {
-              "User-Agent": PW_HEADERS["User-Agent"],
-              "client-id": "5eb393ee95fab7468a79d189",
-              "client-type": "WEB"
-            },
-            signal: AbortSignal.timeout(9000)
-          }
-        ).then(r => r.ok ? r.json() : null).catch(() => null);
-
-        if (ppRes && Array.isArray(ppRes.data) && ppRes.data.length > 0) {
-          rawItems.push(...ppRes.data);
+    // 3. Merge the official public schedule on every request. The mirror can return
+    // partial or stale data while still responding successfully.
+    try {
+      const ppRes = await fetch(
+        `${PW_OFFICIAL_API}/v3/public/batch-service/batch-subject-schedules/${encodeURIComponent(batchId)}/free-schedule`,
+        {
+          headers: {
+            "User-Agent": PW_HEADERS["User-Agent"],
+            "client-id": "5eb393ee95fab7468a79d189",
+            "client-type": "WEB"
+          },
+          signal: AbortSignal.timeout(9000)
         }
-      } catch (err) {}
-    }
+      ).then(r => r.ok ? r.json() : null).catch(() => null);
+
+      if (ppRes && Array.isArray(ppRes.data)) {
+        rawItems.push(...ppRes.data);
+      }
+    } catch (err) {}
 
     // 4. Curriculum Schedule Generator Fallback: If live schedule endpoints returned 0 items (e.g. upstream 502)
     // Synthesize structured weekly schedule from the batch's real subjects, teachers, and chapters across the date range!
@@ -1969,17 +1968,6 @@ async function handleProxy(targetUrl, request) {
   return new Response(response.body, { status: response.status, headers });
 }
 
-// ─── RECAPTCHA VERIFICATION SERVICES (SECURE SERVER-SIDE) ────────────────────
-function getRecaptchaSecretKey() {
-  const enc = [108, 22, 63, 56, 107, 98, 110, 46, 27, 27, 27, 27, 27, 19, 27, 23, 98, 3, 49, 108, 46, 46, 106, 61, 0, 5, 17, 40, 29, 106, 57, 25, 52, 109, 47, 109, 40, 25, 0, 14];
-  return String.fromCharCode(...enc.map(x => x ^ 0x5a));
-}
-
-function getRecaptchaSiteKey() {
-  const enc = [108, 22, 63, 56, 107, 98, 110, 46, 27, 27, 27, 27, 27, 19, 13, 27, 21, 104, 108, 55, 0, 52, 13, 108, 31, 43, 24, 98, 48, 18, 31, 28, 61, 30, 61, 41, 5, 5, 24, 104];
-  return String.fromCharCode(...enc.map(x => x ^ 0x5a));
-}
-
 // ─── CLOUDFLARE WORKER ROUTER ─────────────────────────────────────────────────
 export default {
   async fetch(request, env, ctx) {
@@ -2006,7 +1994,7 @@ export default {
     if (pathname === "/api/recaptcha-sitekey" || pathname === "/api/recaptcha-config") {
       return jsonResponse({
         success: true,
-        siteKey: (env && env.RECAPTCHA_SITE_KEY) || getRecaptchaSiteKey()
+        siteKey: env?.RECAPTCHA_SITE_KEY || ""
       });
     }
 
@@ -2018,7 +2006,10 @@ export default {
         const token = body.token || "";
         if (!token) return jsonResponse({ success: false, error: "Missing verification token" }, 400);
 
-        const secret = (env && env.RECAPTCHA_SECRET_KEY) || getRecaptchaSecretKey();
+        const secret = env?.RECAPTCHA_SECRET_KEY;
+        if (!secret) {
+          return jsonResponse({ success: false, error: "reCAPTCHA server secret is not configured" }, 503);
+        }
         const postData = new URLSearchParams();
         postData.append("secret", secret);
         postData.append("response", token);
