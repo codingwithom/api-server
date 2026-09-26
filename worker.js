@@ -2171,6 +2171,35 @@ export default {
       }
     }
 
+    // Diagnostic route to inspect upstream vidcloud behavior directly on Cloudflare
+    if (pathname === "/api/pw-debug-test") {
+      try {
+        const token = await getPwToken().catch(e => "err: " + e.message);
+        const testUrl = `https://vidcloud.eu.org/api/v2/batches/698ad3519549b300a5e1cc6a/weekly-schedules?batchId=698ad3519549b300a5e1cc6a&startDate=2026-09-26&endDate=2026-09-26&page=1`;
+        const res = await fetch(testUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "Referer": "https://vidcloud.eu.org/",
+            "Origin": "https://vidcloud.eu.org",
+            "Accept": "application/json, text/plain, */*",
+            "Authorization": `Bearer ${token}`
+          },
+          signal: AbortSignal.timeout(8000)
+        });
+        const status = res.status;
+        const text = await res.text();
+        return jsonResponse({
+          tokenLen: token ? token.length : 0,
+          tokenPreview: token ? token.slice(0, 30) : "",
+          upstreamStatus: status,
+          upstreamHeaders: Object.fromEntries(res.headers.entries()),
+          upstreamBody: text.slice(0, 1000)
+        });
+      } catch (err) {
+        return jsonResponse({ error: err.message, stack: err.stack }, 500);
+      }
+    }
+
     // 6. PW Schedule (Official Weekly + Free Schedules + Live Attachments)
     if (pathname === "/api/pw-schedule") {
       const batchId = url.searchParams.get("batchId") || "";
