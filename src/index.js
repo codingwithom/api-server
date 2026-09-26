@@ -2176,24 +2176,49 @@ export default {
       try {
         const token = await getPwToken().catch(e => "err: " + e.message);
         const testUrl = `https://vidcloud.eu.org/api/v2/batches/698ad3519549b300a5e1cc6a/weekly-schedules?batchId=698ad3519549b300a5e1cc6a&startDate=2026-09-26&endDate=2026-09-26&page=1`;
-        const res = await fetch(testUrl, {
+        
+        // Variant A: Standard Chrome headers
+        const resA = await fetch(testUrl, {
           headers: {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-            "Referer": "https://vidcloud.eu.org/",
-            "Origin": "https://vidcloud.eu.org",
-            "Accept": "application/json, text/plain, */*",
             "Authorization": `Bearer ${token}`
           },
-          signal: AbortSignal.timeout(8000)
-        });
-        const status = res.status;
-        const text = await res.text();
+          signal: AbortSignal.timeout(6000)
+        }).then(async r => ({ status: r.status, len: (await r.text()).length })).catch(e => ({ error: e.message }));
+
+        // Variant B: Android App headers
+        const resB = await fetch(testUrl, {
+          headers: {
+            "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 12; SM-G998B Build/SP1A.210812.016)",
+            "client-type": "MOBILE",
+            "Authorization": `Bearer ${token}`
+          },
+          signal: AbortSignal.timeout(6000)
+        }).then(async r => ({ status: r.status, len: (await r.text()).length })).catch(e => ({ error: e.message }));
+
+        // Variant C: Minimal headers (Only Authorization)
+        const resC = await fetch(testUrl, {
+          headers: {
+            "Authorization": `Bearer ${token}`
+          },
+          signal: AbortSignal.timeout(6000)
+        }).then(async r => ({ status: r.status, len: (await r.text()).length })).catch(e => ({ error: e.message }));
+
+        // Variant D: Curl User-Agent
+        const resD = await fetch(testUrl, {
+          headers: {
+            "User-Agent": "curl/7.88.1",
+            "Authorization": `Bearer ${token}`
+          },
+          signal: AbortSignal.timeout(6000)
+        }).then(async r => ({ status: r.status, len: (await r.text()).length })).catch(e => ({ error: e.message }));
+
         return jsonResponse({
           tokenLen: token ? token.length : 0,
-          tokenPreview: token ? token.slice(0, 30) : "",
-          upstreamStatus: status,
-          upstreamHeaders: Object.fromEntries(res.headers.entries()),
-          upstreamBody: text.slice(0, 1000)
+          variantA_Chrome: resA,
+          variantB_Android: resB,
+          variantC_Minimal: resC,
+          variantD_Curl: resD
         });
       } catch (err) {
         return jsonResponse({ error: err.message, stack: err.stack }, 500);
