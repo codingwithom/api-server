@@ -1023,16 +1023,27 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
     const rawItems = [];
     const token = await getPwToken().catch(() => "");
 
-    // 1. Fetch weekly-schedules across pages 1..8 with startDate and endDate
+    // 1. Fetch weekly-schedules across pages 1..15 with startDate and endDate
     if (token) {
       try {
-        const pages = [1, 2, 3, 4, 5, 6, 7, 8];
+        const pages = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         const pagePromises = pages.map(page =>
           fetch(
             `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/weekly-schedules?batchId=${encodeURIComponent(batchId)}&startDate=${encodeURIComponent(sDate)}&endDate=${encodeURIComponent(eDate)}&page=${page}`,
             { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(12000) }
           ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }))
         );
+
+        // Also fetch exact date directly to guarantee today's schedule is immediately available
+        if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+          pagePromises.push(
+            fetch(
+              `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/weekly-schedules?batchId=${encodeURIComponent(batchId)}&startDate=${encodeURIComponent(date)}&endDate=${encodeURIComponent(date)}&page=1`,
+              { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) }
+            ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }))
+          );
+        }
+
         const results = await Promise.all(pagePromises);
         results.forEach(res => {
           if (Array.isArray(res.data) && res.data.length > 0) {
@@ -1139,7 +1150,8 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
     // Deduplicate items by _id
     const seenRawIds = new Set();
     const uniqueRawItems = rawItems.filter(item => {
-      const id = item?._id || (item?.videoDetails && item.videoDetails._id) || (item?.bulkScheduleDetails && item.bulkScheduleDetails._id);
+      const details = item?.videoDetails || item?.notesDetails || item?.dppQuizDetails || item?.bulkScheduleDetails || item?.dppPDFDetails || item?.dppDetails || item;
+      const id = details?._id || item?._id;
       if (!id) return true;
       if (seenRawIds.has(id)) return false;
       seenRawIds.add(id);
@@ -1149,13 +1161,13 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
     // Pre-fetch live attachments for candidate video items (strict limit of 2)
     const scheduleAttachmentsMap = new Map();
     const candidateItems = uniqueRawItems.filter(item => {
-      const details = item?.videoDetails || item?.notesDetails || item;
+      const details = item?.videoDetails || item?.notesDetails || item?.dppQuizDetails || item?.bulkScheduleDetails || item?.dppPDFDetails || item?.dppDetails || item;
       return details && details._id;
     }).slice(0, 2);
     if (token && candidateItems.length > 0) {
       await Promise.all(
         candidateItems.map(async item => {
-          const details = item.videoDetails || item.notesDetails || item;
+          const details = item.videoDetails || item.notesDetails || item.dppQuizDetails || item.bulkScheduleDetails || item.dppPDFDetails || item.dppDetails || item;
           const subId = typeof details.subjectId === "object" ? details.subjectId?._id : (typeof item.subjectId === "object" ? item.subjectId?._id : (details.subjectId || item.subjectId));
           const topicId = details.tags?.[0]?._id || item.tags?.[0]?._id || "";
           const vidId = details._id || item._id;
@@ -1169,7 +1181,7 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
 
     const list = uniqueRawItems.flatMap((item, index) => {
       if (!item || typeof item !== "object") return [];
-      const details = item.videoDetails || item.notesDetails || item.dppQuizDetails || item.bulkScheduleDetails || item.dppDetails || item;
+      const details = item.videoDetails || item.notesDetails || item.dppQuizDetails || item.bulkScheduleDetails || item.dppPDFDetails || item.dppDetails || item;
       const rawSubName = details.subjectId?.name || item.subjectId?.name || (typeof item.subject === "string" ? item.subject : "") || "Subject";
 
       let teacher = "PW Faculty";
@@ -1185,12 +1197,12 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
       }
 
       const topic = details.topic || item.topic || details.name || "Live Class";
-      const start = details.startTime || item.startTime || item.date || date || "";
+      const start = details.startTime || item.startTime || details.date || item.date || "";
       const end = details.endTime || item.endTime || "";
       const duration = details.videoDetails?.duration || details.duration || "1h 45m";
       const tag = (details.tag || item.tag || "").trim();
       const status = (details.status || item.status || "").trim();
-      const itemDate = item.date ? item.date.split("T")[0] : (details.date ? details.date.split("T")[0] : (details.startTime ? details.startTime.split("T")[0] : (start ? start.split("T")[0] : date || "")));
+      const itemDate = item.date ? item.date.split("T")[0] : (details.date ? details.date.split("T")[0] : (details.startTime ? details.startTime.split("T")[0] : (start && /^\d{4}-\d{2}-\d{2}/.test(start) ? start.split("T")[0] : "")));
 
       const isLive = tag.toLowerCase() === "live" || status.toLowerCase() === "live";
       const isEnded = tag.toLowerCase() === "ended" || status.toLowerCase() === "completed" || status.toLowerCase() === "canceled" || status.toLowerCase() === "cancelled" || (!isLive && Boolean(end) && new Date(end).getTime() < Date.now());
@@ -1242,7 +1254,7 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
       }
 
       const isNotes = Boolean(item.notesDetails || details.type === "NOTES" || item.type === "NOTES" || /notes|summary|only pdf/i.test(topic));
-      const isDpp = Boolean(item.dppQuizDetails || item.dppDetails || details.type === "DPP" || item.type === "DPP" || /dpp|quiz/i.test(topic));
+      const isDpp = Boolean(item.dppQuizDetails || item.dppDetails || item.dppPDFDetails || details.type === "DPP" || item.type === "DPP" || item.type === "DPP_PDF" || item.type === "DPP_QUIZ" || /dpp|quiz/i.test(topic));
       const finalType = isDpp ? "DPP" : (isNotes ? "NOTES" : "LECTURE");
 
       const primaryNotesUrl = notesItems.find(n => n.url)?.url || undefined;
@@ -1300,6 +1312,12 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
   const availableDates = Array.from(new Set(allSchedules.map(s => s.date).filter(Boolean))).sort();
   const allEnded = daySchedules.length > 0 && daySchedules.every(s => s.isEnded);
 
+  let latestActiveDate = "";
+  if (availableDates.length > 0) {
+    const pastOrToday = availableDates.filter(d => !date || d <= date);
+    latestActiveDate = pastOrToday.length > 0 ? pastOrToday[pastOrToday.length - 1] : availableDates[availableDates.length - 1];
+  }
+
   const value = {
     batchId,
     date,
@@ -1307,7 +1325,8 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
     statusMessage: allEnded ? "Today's Classes Ended" : undefined,
     schedules: daySchedules,
     allSchedules,
-    availableDates
+    availableDates,
+    latestActiveDate
   };
   return value;
 }
