@@ -265,12 +265,7 @@ async function getPwToken(forceRefresh = false) {
 }
 
 function extractPdfUrl(att, defaultTitle = "") {
-  if (!att || typeof att !== "object") {
-    if (defaultTitle && defaultTitle.trim().length > 0) {
-      return `https://www.google.com/search?q=${encodeURIComponent(defaultTitle.trim() + " class notes pdf physics wallah")}`;
-    }
-    return undefined;
-  }
+  if (!att || typeof att !== "object") return undefined;
   if (typeof att.key === "string" && att.key.trim().length > 0) {
     const key = att.key.trim();
     if (/^https?:\/\//i.test(key)) return key;
@@ -280,11 +275,6 @@ function extractPdfUrl(att, defaultTitle = "") {
   if (typeof att.url === "string" && /^https?:\/\//i.test(att.url.trim())) return att.url.trim();
   if (typeof att.fileUrl === "string" && /^https?:\/\//i.test(att.fileUrl.trim())) return att.fileUrl.trim();
   if (typeof att.link === "string" && /^https?:\/\//i.test(att.link.trim())) return att.link.trim();
-
-  const titleToSearch = (typeof att.name === "string" && att.name.trim()) ? att.name.trim() : defaultTitle;
-  if (titleToSearch && titleToSearch.trim().length > 0) {
-    return `https://www.google.com/search?q=${encodeURIComponent(titleToSearch.trim() + " physics wallah pdf")}`;
-  }
   return undefined;
 }
 
@@ -479,8 +469,8 @@ async function fetchChapterContents(batchId, subjectId, chapterId, token, allowF
               topic: `${tName} : Class Notes ${String(i).padStart(2, "0")}`,
               attachmentIds: [{
                 name: `${tName} Class Notes ${i}.pdf`,
-                baseUrl: "https://www.google.com/search?q=",
-                key: encodeURIComponent(`${tName} class notes pdf physics wallah`)
+                baseUrl: "https://static.pw.live/",
+                key: ""
               }]
             });
           }
@@ -491,8 +481,8 @@ async function fetchChapterContents(batchId, subjectId, chapterId, token, allowF
               topic: `${tName} : DPP Sheet ${String(i).padStart(2, "0")}`,
               attachmentIds: [{
                 name: `${tName} DPP Sheet ${i}.pdf`,
-                baseUrl: "https://www.google.com/search?q=",
-                key: encodeURIComponent(`${tName} dpp pdf physics wallah`)
+                baseUrl: "https://static.pw.live/",
+                key: ""
               }]
             });
           }
@@ -500,15 +490,18 @@ async function fetchChapterContents(batchId, subjectId, chapterId, token, allowF
       } catch (synthErr) {}
     }
 
-    // Pre-fetch live verified PDF attachments for candidates (strict limit of 2 to protect Worker subrequest limits)
+    // Pre-fetch live verified PDF attachments for candidate videos in controlled chunks of 4
     const videoAttachmentsMap = new Map();
-    const candidateVideos = rawVideos.filter(v => v && v._id).slice(0, 2);
-    await Promise.all(
-      candidateVideos.map(async (v) => {
-        const atts = await fetchVideoAttachments(batchId, subjectId, chapterId, v._id, token);
-        if (atts) videoAttachmentsMap.set(v._id, atts);
-      })
-    );
+    const candidateVideos = rawVideos.filter(v => v && v._id).slice(0, 16);
+    for (let i = 0; i < candidateVideos.length; i += 4) {
+      const chunk = candidateVideos.slice(i, i + 4);
+      await Promise.all(
+        chunk.map(async (v) => {
+          const atts = await fetchVideoAttachments(batchId, subjectId, chapterId, v._id, token);
+          if (atts) videoAttachmentsMap.set(v._id, atts);
+        })
+      );
+    }
 
     const notesList = [];
     rawNotes.forEach(item => {
@@ -1004,14 +997,14 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
   let eDate = endDate;
 
   if (!sDate || !eDate || !/^\d{4}-\d{2}-\d{2}$/.test(sDate) || !/^\d{4}-\d{2}-\d{2}$/.test(eDate)) {
-    let targetMonth = month;
-    if (!targetMonth || !/^\d{4}-\d{2}$/.test(targetMonth)) {
-      if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
-        targetMonth = date.slice(0, 7);
-      } else {
-        const istDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
-        targetMonth = istDate.slice(0, 7);
-      }
+    let targetMonth = "";
+    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      targetMonth = date.slice(0, 7);
+    } else if (month && /^\d{4}-\d{2}$/.test(month)) {
+      targetMonth = month;
+    } else {
+      const istDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+      targetMonth = istDate.slice(0, 7);
     }
     const [y, m] = targetMonth.split("-").map(Number);
     const lastDay = new Date(y, m, 0).getDate();
@@ -1187,25 +1180,34 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
       return true;
     });
 
-    // Pre-fetch live attachments for candidate video items (strict limit of 2)
+    // Pre-fetch live attachments for candidate video items prioritizing target date
     const scheduleAttachmentsMap = new Map();
-    const candidateItems = uniqueRawItems.filter(item => {
+    const dateCandidateItems = uniqueRawItems.filter(item => {
+      const details = item?.videoDetails || item?.notesDetails || item?.dppQuizDetails || item?.bulkScheduleDetails || item?.dppPDFDetails || item?.dppDetails || item;
+      const d = item.date ? item.date.split("T")[0] : (details?.date ? details.date.split("T")[0] : (details?.startTime ? details.startTime.split("T")[0] : ""));
+      return details && details._id && (!date || d === date);
+    });
+    const candidateItems = (dateCandidateItems.length > 0 ? dateCandidateItems : uniqueRawItems.filter(item => {
       const details = item?.videoDetails || item?.notesDetails || item?.dppQuizDetails || item?.bulkScheduleDetails || item?.dppPDFDetails || item?.dppDetails || item;
       return details && details._id;
-    }).slice(0, 2);
+    })).slice(0, 8);
+
     if (token && candidateItems.length > 0) {
-      await Promise.all(
-        candidateItems.map(async item => {
-          const details = item.videoDetails || item.notesDetails || item.dppQuizDetails || item.bulkScheduleDetails || item.dppPDFDetails || item.dppDetails || item;
-          const subId = typeof details.subjectId === "object" ? details.subjectId?._id : (typeof item.subjectId === "object" ? item.subjectId?._id : (details.subjectId || item.subjectId));
-          const topicId = details.tags?.[0]?._id || item.tags?.[0]?._id || "";
-          const vidId = details._id || item._id;
-          if (subId && vidId) {
-            const atts = await fetchVideoAttachments(batchId, subId, topicId, vidId, token);
-            if (atts) scheduleAttachmentsMap.set(vidId, atts);
-          }
-        })
-      );
+      for (let i = 0; i < candidateItems.length; i += 4) {
+        const chunk = candidateItems.slice(i, i + 4);
+        await Promise.all(
+          chunk.map(async item => {
+            const details = item.videoDetails || item.notesDetails || item.dppQuizDetails || item.bulkScheduleDetails || item.dppPDFDetails || item.dppDetails || item;
+            const subId = typeof details.subjectId === "object" ? details.subjectId?._id : (typeof item.subjectId === "object" ? item.subjectId?._id : (details.subjectId || item.subjectId));
+            const topicId = details.tags?.[0]?._id || item.tags?.[0]?._id || "";
+            const vidId = details._id || item._id;
+            if (subId && vidId) {
+              const atts = await fetchVideoAttachments(batchId, subId, topicId, vidId, token);
+              if (atts) scheduleAttachmentsMap.set(vidId, atts);
+            }
+          })
+        );
+      }
     }
 
     const list = uniqueRawItems.flatMap((item, index) => {
