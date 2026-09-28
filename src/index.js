@@ -2399,6 +2399,11 @@ export default {
             }
           }, 200, { "Cache-Control": "no-cache, no-store, must-revalidate" });
         }
+        const hasContent = Boolean(data && (
+          (Array.isArray(data.lectures) && data.lectures.length > 0) ||
+          (Array.isArray(data.notes) && data.notes.length > 0) ||
+          (Array.isArray(data.dpps) && data.dpps.length > 0)
+        ));
         return jsonResponse(data, 200, { "Cache-Control": hasContent ? "public, max-age=600" : "no-cache, no-store, must-revalidate" });
       } catch (err) {
         return jsonResponse({ chapterId, lectures: [], videosOnly: [], notes: [], dpps: [], _error: err.message });
