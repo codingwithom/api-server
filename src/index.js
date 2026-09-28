@@ -433,6 +433,22 @@ async function fetchChapterContents(batchId, subjectId, chapterId, token, allowF
       } catch (p2Err) {}
     }
 
+    // Auto-fallback A: Query live verified high-speed upstream bridge
+    if (rawVideos.length === 0 && rawNotes.length === 0 && rawDpps.length === 0) {
+      try {
+        const cleanT = (chapterTitle || "").replace(/[/\\]+$/, "").trim();
+        const bridgeUrl = `https://congenial-space-sniffle-xj5rq9v9wj93pvxj-8080.app.github.dev/api/pw-chapter-contents?batchId=${encodeURIComponent(batchId)}&subjectId=${encodeURIComponent(subjectId)}&chapterId=${encodeURIComponent(chapterId)}&chapterTitle=${encodeURIComponent(cleanT)}`;
+        const bRes = await fetch(bridgeUrl, { signal: AbortSignal.timeout(5000) });
+        if (bRes.ok) {
+          const bData = await bRes.json();
+          if (bData && (bData.totalLectures > 0 || bData.totalNotes > 0 || bData.totalDpps > 0 || (Array.isArray(bData.lectures) && bData.lectures.length > 0))) {
+            pwChapterCache.set(cacheKey, { data: bData, expiresAt: Date.now() + PW_CHAPTER_TTL });
+            return bData;
+          }
+        }
+      } catch (brErr) {}
+    }
+
     // Auto-fallback 0: If token expired, try backup token or force-refresh token from generate_token.php and retry once
     if (allowFallback && rawVideos.length === 0 && rawNotes.length === 0 && rawDpps.length === 0) {
       pwTokenMemoryCache = { token: "", expiresAt: 0 };
@@ -523,17 +539,42 @@ async function fetchChapterContents(batchId, subjectId, chapterId, token, allowF
       } catch (schedErr) {}
     }
 
-    // Auto-fallback 3: Query official PenPencil topic metadata and synthesize curriculum slots
+    // Auto-fallback 3: Query official PenPencil topic metadata across all pages and synthesize curriculum slots
     if (rawVideos.length === 0 && rawNotes.length === 0 && rawDpps.length === 0) {
       try {
-        const topRes = await fetch(`${PW_OFFICIAL_API}/v1/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/topics?page=1`, {
-          headers: { "client-id": "5eb393ee95fab7468a79d189", "client-type": "WEB" },
-          signal: AbortSignal.timeout(8000)
-        }).then(r => r.ok ? r.json() : null).catch(() => null);
+        const topPages = await Promise.all([
+          fetch(`${PW_OFFICIAL_API}/v1/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/topics?page=1`, {
+            headers: { "client-id": "5eb393ee95fab7468a79d189", "client-type": "WEB" },
+            signal: AbortSignal.timeout(6000)
+          }).then(r => r.ok ? r.json() : null).catch(() => null),
+          fetch(`${PW_OFFICIAL_API}/v1/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/topics?page=2`, {
+            headers: { "client-id": "5eb393ee95fab7468a79d189", "client-type": "WEB" },
+            signal: AbortSignal.timeout(6000)
+          }).then(r => r.ok ? r.json() : null).catch(() => null),
+          fetch(`${PW_OFFICIAL_API}/v1/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/topics?page=3`, {
+            headers: { "client-id": "5eb393ee95fab7468a79d189", "client-type": "WEB" },
+            signal: AbortSignal.timeout(6000)
+          }).then(r => r.ok ? r.json() : null).catch(() => null),
+          fetch(`${PW_OFFICIAL_API}/v1/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/topics?page=4`, {
+            headers: { "client-id": "5eb393ee95fab7468a79d189", "client-type": "WEB" },
+            signal: AbortSignal.timeout(6000)
+          }).then(r => r.ok ? r.json() : null).catch(() => null)
+        ]);
 
-        let matchTopic = (topRes?.data || []).find(t => t._id === chapterId || t.slug === chapterId || (chapterTitle && t.name?.toLowerCase().includes(chapterTitle.toLowerCase())));
-        if (!matchTopic && Array.isArray(topRes?.data)) {
-          matchTopic = topRes.data.find(t => t.name && chapterId && t.name.toLowerCase().includes(chapterId.toLowerCase()));
+        const allTopics = [];
+        topPages.forEach(tp => {
+          if (Array.isArray(tp?.data)) allTopics.push(...tp.data);
+        });
+
+        const cleanChapId = (chapterId || "").replace(/[/\\]+$/, "").trim();
+        const cleanChapTitle = (chapterTitle || "").replace(/[/\\]+$/, "").trim().toLowerCase();
+
+        let matchTopic = allTopics.find(t => t._id === cleanChapId || t.slug === cleanChapId || (cleanChapTitle && t.name?.toLowerCase().includes(cleanChapTitle)));
+        if (!matchTopic && cleanChapTitle) {
+          matchTopic = allTopics.find(t => t.name && (t.name.toLowerCase().includes(cleanChapTitle) || cleanChapTitle.includes(t.name.toLowerCase())));
+        }
+        if (!matchTopic && cleanChapId) {
+          matchTopic = allTopics.find(t => t.name && t.name.toLowerCase().includes(cleanChapId.toLowerCase()));
         }
 
         if (matchTopic) {
@@ -1207,6 +1248,21 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
           }
         });
       } catch (err) {}
+    }
+
+    // Fallback: Query live high-speed upstream bridge if rawItems is still empty
+    if (rawItems.length === 0) {
+      try {
+        const bridgeUrl = `https://congenial-space-sniffle-xj5rq9v9wj93pvxj-8080.app.github.dev/api/pw-schedule?batchId=${encodeURIComponent(batchId)}&date=${encodeURIComponent(date)}&month=${encodeURIComponent(month || "")}&startDate=${encodeURIComponent(startDate || "")}&endDate=${encodeURIComponent(endDate || "")}`;
+        const bRes = await fetch(bridgeUrl, { signal: AbortSignal.timeout(6000) });
+        if (bRes.ok) {
+          const bData = await bRes.json();
+          if (bData && Array.isArray(bData.schedules) && bData.schedules.length > 0) {
+            pwScheduleCache.set(cacheKey, { ...bData, expiresAt: Date.now() + PW_SCHEDULE_TTL });
+            return bData;
+          }
+        }
+      } catch (bErr) {}
     }
 
     // 3. Merge the official public schedule on every request. The mirror can return
@@ -2328,20 +2384,22 @@ export default {
       try {
         const token = await getPwToken().catch(() => "");
         const data = await fetchChapterContents(batchId, subjectId, chapterId, token, true, chapterTitle);
-        const hasContent = Boolean(data && (data.totalLectures > 0 || data.totalNotes > 0 || data.totalDpps > 0 || (Array.isArray(data.lectures) && data.lectures.length > 0)));
-        return jsonResponse({
-          ...data,
-          _debug: {
-            batchId,
-            subjectId,
-            chapterId,
-            chapterTitle,
-            tokenLen: token ? token.length : 0,
-            tokenPrefix: token ? token.slice(0, 20) : "",
-            rawVideosLen: data?.videosOnly?.length,
-            lecturesLen: data?.lectures?.length
-          }
-        }, 200, { "Cache-Control": "no-cache, no-store, must-revalidate" });
+        if (url.searchParams.get("debug") === "1") {
+          return jsonResponse({
+            ...data,
+            _debug: {
+              batchId,
+              subjectId,
+              chapterId,
+              chapterTitle,
+              tokenLen: token ? token.length : 0,
+              tokenPrefix: token ? token.slice(0, 20) : "",
+              rawVideosLen: data?.videosOnly?.length,
+              lecturesLen: data?.lectures?.length
+            }
+          }, 200, { "Cache-Control": "no-cache, no-store, must-revalidate" });
+        }
+        return jsonResponse(data, 200, { "Cache-Control": hasContent ? "public, max-age=600" : "no-cache, no-store, must-revalidate" });
       } catch (err) {
         return jsonResponse({ chapterId, lectures: [], videosOnly: [], notes: [], dpps: [], _error: err.message });
       }
