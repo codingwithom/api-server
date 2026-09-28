@@ -19,9 +19,59 @@ const CORS_HEADERS = {
 };
 
 // ─── CONSTANTS & CONFIGURATION ────────────────────────────────────────────────
+const PW_THOR_ORIGIN = "https://pwthor.live";
 const PW_DETAILS_ORIGIN = "https://vidcloud.eu.org";
 const PW_OFFICIAL_API = "https://api.penpencil.co";
 const PW_CATALOG_URL = "https://studystark.github.io/batches/batches.json";
+
+const PW_THOR_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+  "Accept": "application/json, text/plain, */*",
+  "Referer": "https://pwthor.live/study/batches",
+  "Origin": "https://pwthor.live",
+};
+
+async function fetchCatalogFromPwThor(searchQuery = "", page = 1) {
+  try {
+    const url = `${PW_THOR_ORIGIN}/api/AllBatches?page=${page}${searchQuery ? `&search=${encodeURIComponent(searchQuery)}` : ""}`;
+    const res = await fetch(url, {
+      headers: PW_THOR_HEADERS,
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!res.ok) {
+      console.warn(`[PW Engine]: pwthor.live responded with status ${res.status}`);
+      return null;
+    }
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.includes("json")) {
+      console.warn("[PW Engine]: pwthor.live returned non-JSON challenge, falling back to secondary source.");
+      return null;
+    }
+    const data = await res.json();
+    let rawList = [];
+    if (Array.isArray(data)) rawList = data;
+    else if (Array.isArray(data?.data)) rawList = data.data;
+    else if (Array.isArray(data?.batches)) rawList = data.batches;
+    else if (Array.isArray(data?.results)) rawList = data.results;
+
+    if (rawList.length > 0) {
+      return rawList.map((b, idx) => ({
+        batch_id: String(b.batch_id || b._id || b.id || `thor-${idx}`),
+        name: String(b.name || b.batch_name || b.title || "Physics Wallah Batch"),
+        byName: String(b.byName || b.description || b.target || "PW Preparation"),
+        exam: String(b.exam || (Array.isArray(b.exams) ? b.exams.join(", ") : "JEE")),
+        class: String(b.class || b.standard || ""),
+        language: String(b.language || "Hinglish"),
+        fee: b.fee || b.price || "Free",
+        previewImage: b.previewImage || b.image || b.thumbnail || undefined
+      }));
+    }
+    return null;
+  } catch (err) {
+    console.warn(`[PW Engine]: pwthor.live fetch failed (${err.message}), cascading to secondary sources.`);
+    return null;
+  }
+}
 
 const POPULAR_PW_BATCHES = [
   {
@@ -308,26 +358,51 @@ async function fetchChapterContents(batchId, subjectId, chapterId, token, allowF
   }
 
   try {
-    const reqHeaders = getPwRequestHeaders(token);
-    // Fetch page 1 contents
-    const [vRes, nRes, dRes] = await Promise.all([
-      fetch(
-        `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/contents?page=1&contentType=videos&tag=${encodeURIComponent(chapterId)}`,
-        { headers: reqHeaders, signal: AbortSignal.timeout(10000) }
-      ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] })),
-      fetch(
-        `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/contents?page=1&contentType=notes&tag=${encodeURIComponent(chapterId)}`,
-        { headers: reqHeaders, signal: AbortSignal.timeout(10000) }
-      ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] })),
-      fetch(
-        `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/contents?page=1&contentType=DppNotes&tag=${encodeURIComponent(chapterId)}`,
-        { headers: reqHeaders, signal: AbortSignal.timeout(10000) }
-      ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }))
-    ]);
+    let rawVideos = [];
+    let rawNotes = [];
+    let rawDpps = [];
 
-    let rawVideos = Array.isArray(vRes.data) ? [...vRes.data] : [];
-    let rawNotes = Array.isArray(nRes.data) ? [...nRes.data] : [];
-    let rawDpps = Array.isArray(dRes.data) ? [...dRes.data] : [];
+    // Priority 1: Try fetching chapter contents from pwthor.live
+    try {
+      const thorUrl = `${PW_THOR_ORIGIN}/api/contents?batchId=${encodeURIComponent(batchId)}&subjectId=${encodeURIComponent(subjectId)}&tag=${encodeURIComponent(chapterId)}`;
+      const thorRes = await fetch(thorUrl, {
+        headers: PW_THOR_HEADERS,
+        signal: AbortSignal.timeout(5000)
+      });
+      if (thorRes.ok && (thorRes.headers.get("content-type") || "").includes("json")) {
+        const thorData = await thorRes.json();
+        const v = thorData.videos || thorData.data?.videos || (Array.isArray(thorData.data) ? thorData.data : []);
+        const n = thorData.notes || thorData.data?.notes || [];
+        const d = thorData.dpps || thorData.data?.dpps || [];
+        if (Array.isArray(v) && v.length > 0) rawVideos.push(...v);
+        if (Array.isArray(n) && n.length > 0) rawNotes.push(...n);
+        if (Array.isArray(d) && d.length > 0) rawDpps.push(...d);
+      }
+    } catch (e) {}
+
+    // Priority 2: Fall back to vidcloud mirror if pwthor had no contents
+    if (rawVideos.length === 0 && rawNotes.length === 0 && rawDpps.length === 0) {
+      const reqHeaders = getPwRequestHeaders(token);
+      // Fetch page 1 contents
+      const [vRes, nRes, dRes] = await Promise.all([
+        fetch(
+          `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/contents?page=1&contentType=videos&tag=${encodeURIComponent(chapterId)}`,
+          { headers: reqHeaders, signal: AbortSignal.timeout(10000) }
+        ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] })),
+        fetch(
+          `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/contents?page=1&contentType=notes&tag=${encodeURIComponent(chapterId)}`,
+          { headers: reqHeaders, signal: AbortSignal.timeout(10000) }
+        ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] })),
+        fetch(
+          `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(subjectId)}/contents?page=1&contentType=DppNotes&tag=${encodeURIComponent(chapterId)}`,
+          { headers: reqHeaders, signal: AbortSignal.timeout(10000) }
+        ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }))
+      ]);
+
+      if (Array.isArray(vRes.data)) rawVideos.push(...vRes.data);
+      if (Array.isArray(nRes.data)) rawNotes.push(...nRes.data);
+      if (Array.isArray(dRes.data)) rawDpps.push(...dRes.data);
+    }
 
     // If page 1 had max items (usually 20), fetch page 2 to ensure complete chapter history
     if (rawVideos.length >= 20 || rawNotes.length >= 20 || rawDpps.length >= 20) {
@@ -886,8 +961,16 @@ async function fetchPwMetadata(batchId) {
   let detailsPayload = null;
   const candidates = [
     {
+      url: `${PW_THOR_ORIGIN}/api/batchDetails?batchId=${encodeURIComponent(batchId)}`,
+      headers: PW_THOR_HEADERS
+    },
+    {
+      url: `${PW_THOR_ORIGIN}/api/batches/${encodeURIComponent(batchId)}`,
+      headers: PW_THOR_HEADERS
+    },
+    {
       url: `${PW_OFFICIAL_API}/v3/batches/${encodeURIComponent(batchId)}/details?type=EXPLORE_LEAD`,
-      headers: { "User-Agent": PW_HEADERS["User-Agent"], "client-type": "WEB", "Accept": "application/json, text/plain, */*" }
+      headers: { "User-Agent": PW_HEADERS["User-Agent"], "client-type": "WEB", "client-id": "5eb393ee95fab7468a79d189", "Accept": "application/json, text/plain, */*" }
     },
     {
       url: `${PW_DETAILS_ORIGIN}/api/v3/batches/${encodeURIComponent(batchId)}/details?type=EXPLORE_LEAD`,
@@ -905,9 +988,12 @@ async function fetchPwMetadata(batchId) {
         headers: candidate.headers,
         signal: AbortSignal.timeout(10000)
       });
-      if (res.ok) {
+      if (res.ok && (res.headers.get("content-type") || "").includes("json")) {
         detailsPayload = await res.json();
-        if (detailsPayload && (detailsPayload.data || detailsPayload.subjects)) break;
+        if (detailsPayload && (detailsPayload.data || detailsPayload.subjects || detailsPayload.batch)) {
+          if (detailsPayload.batch && !detailsPayload.data) detailsPayload.data = detailsPayload.batch;
+          break;
+        }
       }
     } catch (err) {}
   }
@@ -1017,9 +1103,24 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
 
   if (!fullSchedule || fullSchedule.expiresAt <= Date.now()) {
     const rawItems = [];
+
+    // Priority 1: Try fetching schedules from pwthor.live
+    try {
+      const thorUrl = `${PW_THOR_ORIGIN}/api/Schedule?batchId=${encodeURIComponent(batchId)}&startDate=${encodeURIComponent(sDate)}&endDate=${encodeURIComponent(eDate)}`;
+      const thorRes = await fetch(thorUrl, {
+        headers: PW_THOR_HEADERS,
+        signal: AbortSignal.timeout(5000)
+      });
+      if (thorRes.ok && (thorRes.headers.get("content-type") || "").includes("json")) {
+        const thorData = await thorRes.json();
+        const sched = Array.isArray(thorData) ? thorData : (Array.isArray(thorData.data) ? thorData.data : (Array.isArray(thorData.schedules) ? thorData.schedules : []));
+        if (sched.length > 0) rawItems.push(...sched);
+      }
+    } catch (e) {}
+
     let token = await getPwToken().catch(() => "");
 
-    // 1. Fetch weekly-schedules across pages 1..12 in small non-flooding chunks of 4
+    // Priority 2: Fetch weekly-schedules from vidcloud across pages 1..12 in small non-flooding chunks of 4
     if (token) {
       try {
         const pages = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
@@ -2118,17 +2219,31 @@ export default {
       const wantAll = url.searchParams.get("all") === "true";
 
       let catalogList = [];
-      if (pwCatalogCache.data && Array.isArray(pwCatalogCache.data.data)) {
-        catalogList = pwCatalogCache.data.data;
-      } else {
-        try {
-          const res = await fetch(PW_CATALOG_URL, { headers: PW_HEADERS, signal: AbortSignal.timeout(12000) });
-          if (res.ok) {
-            const data = await res.json();
-            pwCatalogCache = { data, expiresAt: Date.now() + PW_CATALOG_TTL };
-            catalogList = Array.isArray(data.data) ? data.data : (Array.isArray(data) ? data : []);
-          }
-        } catch (err) {}
+
+      // Priority 1: Try PWThor live catalog first
+      try {
+        const thorBatches = await fetchCatalogFromPwThor(searchQuery, 1);
+        if (thorBatches && Array.isArray(thorBatches) && thorBatches.length > 0) {
+          catalogList = thorBatches;
+        }
+      } catch (thorErr) {
+        console.warn("[PW Engine]: PWThor catalog attempt failed, cascading to secondary sources:", thorErr.message);
+      }
+
+      // Priority 2: Fall back to cache or studystark / vidcloud catalog
+      if (catalogList.length === 0) {
+        if (pwCatalogCache.data && Array.isArray(pwCatalogCache.data.data)) {
+          catalogList = pwCatalogCache.data.data;
+        } else {
+          try {
+            const res = await fetch(PW_CATALOG_URL, { headers: PW_HEADERS, signal: AbortSignal.timeout(12000) });
+            if (res.ok) {
+              const data = await res.json();
+              pwCatalogCache = { data, expiresAt: Date.now() + PW_CATALOG_TTL };
+              catalogList = Array.isArray(data.data) ? data.data : (Array.isArray(data) ? data : []);
+            }
+          } catch (err) {}
+        }
       }
 
       if (catalogList.length === 0 && pwCatalogCache.data) {
@@ -2140,7 +2255,7 @@ export default {
       }
 
       if (wantAll && !searchQuery && !examQuery && !classQuery) {
-        return jsonResponse({ success: true, count: catalogList.length, data: catalogList }, 200, { "Cache-Control": "public, max-age=1800" });
+        return jsonResponse({ success: true, source: "pw-engine", count: catalogList.length, data: catalogList }, 200, { "Cache-Control": "public, max-age=1800" });
       }
 
       let filtered = catalogList;
@@ -2165,6 +2280,7 @@ export default {
 
       return jsonResponse({
         success: true,
+        source: "pw-engine",
         total: filtered.length,
         data: filtered.slice(0, limit)
       }, 200, { "Cache-Control": "public, max-age=600" });
