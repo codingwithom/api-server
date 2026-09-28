@@ -2353,16 +2353,42 @@ export default {
         const batchId = "698ad3519549b300a5e1cc6a";
         const subjectId = "69b5698ee506a608ee297ed1";
         const chapterId = "69dc843271d06abbf386976d";
-        const chapRes = await fetchChapterContents(batchId, subjectId, chapterId, token, true, "Circular Motion");
+        const reqHeaders = getPwRequestHeaders(token);
+
+        const vcUrl = `${PW_DETAILS_ORIGIN}/api/v2/batches/${batchId}/subject/${subjectId}/contents?page=1&contentType=videos&tag=${chapterId}`;
+        let vcStatus = 0;
+        let vcText = "";
+        let vcErr = null;
+        try {
+          const res = await fetch(vcUrl, { headers: reqHeaders, signal: AbortSignal.timeout(9000) });
+          vcStatus = res.status;
+          vcText = (await res.text()).slice(0, 300);
+        } catch (e) {
+          vcErr = e.message;
+        }
+
+        const thorUrl = `${PW_THOR_ORIGIN}/api/AllBatches?page=1`;
+        let thorStatus = 0;
+        let thorText = "";
+        let thorErr = null;
+        try {
+          const res = await fetch(thorUrl, { headers: PW_THOR_HEADERS, signal: AbortSignal.timeout(9000) });
+          thorStatus = res.status;
+          thorText = (await res.text()).slice(0, 300);
+        } catch (e) {
+          thorErr = e.message;
+        }
 
         return jsonResponse({
           tokenLen: token ? token.length : 0,
-          tokenPrefix: token ? token.slice(0, 20) : "",
-          chapLecturesCount: chapRes?.lectures?.length || 0,
-          chapTotalLectures: chapRes?.totalLectures || 0,
-          chapTotalNotes: chapRes?.totalNotes || 0,
-          chapTotalDpps: chapRes?.totalDpps || 0,
-          firstLecture: chapRes?.lectures?.[0]?.title || null
+          vcUrl,
+          vcStatus,
+          vcErr,
+          vcText,
+          thorUrl,
+          thorStatus,
+          thorErr,
+          thorText
         });
       } catch (err) {
         return jsonResponse({ error: err.message, stack: err.stack }, 500);
