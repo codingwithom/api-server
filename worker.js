@@ -2328,9 +2328,21 @@ export default {
         const token = await getPwToken().catch(() => "");
         const data = await fetchChapterContents(batchId, subjectId, chapterId, token, true, chapterTitle);
         const hasContent = Boolean(data && (data.totalLectures > 0 || data.totalNotes > 0 || data.totalDpps > 0 || (Array.isArray(data.lectures) && data.lectures.length > 0)));
-        return jsonResponse(data, 200, { "Cache-Control": hasContent ? "public, max-age=1800" : "no-cache, no-store, must-revalidate" });
+        return jsonResponse({
+          ...data,
+          _debug: {
+            batchId,
+            subjectId,
+            chapterId,
+            chapterTitle,
+            tokenLen: token ? token.length : 0,
+            tokenPrefix: token ? token.slice(0, 20) : "",
+            rawVideosLen: data?.videosOnly?.length,
+            lecturesLen: data?.lectures?.length
+          }
+        }, 200, { "Cache-Control": "no-cache, no-store, must-revalidate" });
       } catch (err) {
-        return jsonResponse({ chapterId, lectures: [], videosOnly: [], notes: [], dpps: [] });
+        return jsonResponse({ chapterId, lectures: [], videosOnly: [], notes: [], dpps: [], _error: err.message });
       }
     }
 
