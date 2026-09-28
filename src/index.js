@@ -2356,44 +2356,56 @@ export default {
         const reqHeaders = getPwRequestHeaders(token);
 
         const vcUrl = `${PW_DETAILS_ORIGIN}/api/v2/batches/${batchId}/subject/${subjectId}/contents?page=1&contentType=videos&tag=${chapterId}`;
-        let vcStatus = 0;
-        let vcText = "";
-        let vcErr = null;
-        let vcHeaders = {};
-        try {
-          const res = await fetch(vcUrl, { headers: reqHeaders, signal: AbortSignal.timeout(9000) });
-          vcStatus = res.status;
-          for (const [k, v] of res.headers.entries()) {
-            vcHeaders[k] = v;
-          }
-          vcText = (await res.text()).slice(0, 300);
-        } catch (e) {
-          vcErr = e.message;
-        }
+        
+        // Variant 1: With current getPwRequestHeaders
+        const res1 = await fetch(vcUrl, { headers: reqHeaders, signal: AbortSignal.timeout(6000) })
+          .then(async r => ({ status: r.status, text: (await r.text()).slice(0, 100) }))
+          .catch(e => ({ error: e.message }));
 
-        const thorUrl = `${PW_THOR_ORIGIN}/api/AllBatches?page=1`;
-        let thorStatus = 0;
-        let thorText = "";
-        let thorErr = null;
-        try {
-          const res = await fetch(thorUrl, { headers: PW_THOR_HEADERS, signal: AbortSignal.timeout(9000) });
-          thorStatus = res.status;
-          thorText = (await res.text()).slice(0, 300);
-        } catch (e) {
-          thorErr = e.message;
-        }
+        // Variant 2: Clean NO COOKIE
+        const res2 = await fetch(vcUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "Referer": "https://vidcloud.eu.org/",
+            "Origin": "https://vidcloud.eu.org",
+            "Authorization": `Bearer ${token}`
+          },
+          signal: AbortSignal.timeout(6000)
+        }).then(async r => ({ status: r.status, text: (await r.text()).slice(0, 100) }))
+          .catch(e => ({ error: e.message }));
+
+        // Variant 3: Clean NO COOKIE + X-Forwarded-For
+        const randIp = `103.${Math.floor(Math.random()*150)+50}.${Math.floor(Math.random()*200)+10}.${Math.floor(Math.random()*200)+10}`;
+        const res3 = await fetch(vcUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "Referer": "https://vidcloud.eu.org/",
+            "Origin": "https://vidcloud.eu.org",
+            "Authorization": `Bearer ${token}`,
+            "X-Forwarded-For": randIp,
+            "X-Real-IP": randIp
+          },
+          signal: AbortSignal.timeout(6000)
+        }).then(async r => ({ status: r.status, text: (await r.text()).slice(0, 100) }))
+          .catch(e => ({ error: e.message }));
+
+        // Variant 4: Mobile App headers
+        const res4 = await fetch(vcUrl, {
+          headers: {
+            "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 12; SM-G998B Build/SP1A.210812.016)",
+            "client-type": "MOBILE",
+            "Authorization": `Bearer ${token}`
+          },
+          signal: AbortSignal.timeout(6000)
+        }).then(async r => ({ status: r.status, text: (await r.text()).slice(0, 100) }))
+          .catch(e => ({ error: e.message }));
 
         return jsonResponse({
           tokenLen: token ? token.length : 0,
-          vcUrl,
-          vcStatus,
-          vcHeaders,
-          vcErr,
-          vcText,
-          thorUrl,
-          thorStatus,
-          thorErr,
-          thorText
+          v1_Current: res1,
+          v2_NoCookie: res2,
+          v3_NoCookie_XFF: res3,
+          v4_Mobile: res4
         });
       } catch (err) {
         return jsonResponse({ error: err.message, stack: err.stack }, 500);
