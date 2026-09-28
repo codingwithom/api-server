@@ -2359,9 +2359,13 @@ export default {
         let vcStatus = 0;
         let vcText = "";
         let vcErr = null;
+        let vcHeaders = {};
         try {
           const res = await fetch(vcUrl, { headers: reqHeaders, signal: AbortSignal.timeout(9000) });
           vcStatus = res.status;
+          for (const [k, v] of res.headers.entries()) {
+            vcHeaders[k] = v;
+          }
           vcText = (await res.text()).slice(0, 300);
         } catch (e) {
           vcErr = e.message;
@@ -2383,6 +2387,7 @@ export default {
           tokenLen: token ? token.length : 0,
           vcUrl,
           vcStatus,
+          vcHeaders,
           vcErr,
           vcText,
           thorUrl,
