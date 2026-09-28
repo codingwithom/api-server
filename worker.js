@@ -468,6 +468,7 @@ async function fetchChapterContents(batchId, subjectId, chapterId, token, allowF
 
     // Auto-fallback 2: Harvest chapter contents from the batch weekly schedule history
     if (rawVideos.length === 0 && rawNotes.length === 0 && rawDpps.length === 0) {
+      try {
         const cleanChapTitle = (chapterTitle || "").replace(/[/\\]+$/, "").trim();
         const cleanChapId = (chapterId || "").replace(/[/\\]+$/, "").trim();
         const searchTerms = [
