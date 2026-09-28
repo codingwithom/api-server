@@ -469,11 +469,11 @@ async function fetchChapterContents(batchId, subjectId, chapterId, token, allowF
       try {
         const searchTerms = [chapterId, chapterTitle].filter(Boolean).map(s => s.toLowerCase().trim());
         const schedPromises = [
-          fetch(`${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/weekly-schedules?batchId=${encodeURIComponent(batchId)}&page=1`, { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(9000) }).then(r => r.ok ? r.json() : null).catch(() => null),
-          fetch(`${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/weekly-schedules?batchId=${encodeURIComponent(batchId)}&page=2`, { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(9000) }).then(r => r.ok ? r.json() : null).catch(() => null),
-          fetch(`${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/weekly-schedules?batchId=${encodeURIComponent(batchId)}&startDate=2026-04-01&endDate=2027-04-30&page=1`, { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(9000) }).then(r => r.ok ? r.json() : null).catch(() => null),
-          fetch(`${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/weekly-schedules?batchId=${encodeURIComponent(batchId)}&startDate=2026-04-01&endDate=2027-04-30&page=2`, { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(9000) }).then(r => r.ok ? r.json() : null).catch(() => null),
-          fetch(`${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/weekly-schedules?batchId=${encodeURIComponent(batchId)}&startDate=2026-04-01&endDate=2027-04-30&page=3`, { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(9000) }).then(r => r.ok ? r.json() : null).catch(() => null),
+          fetch(`${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/weekly-schedules?batchId=${encodeURIComponent(batchId)}&page=1`, { headers: getPwRequestHeaders(token), signal: AbortSignal.timeout(9000) }).then(r => r.ok ? r.json() : null).catch(() => null),
+          fetch(`${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/weekly-schedules?batchId=${encodeURIComponent(batchId)}&page=2`, { headers: getPwRequestHeaders(token), signal: AbortSignal.timeout(9000) }).then(r => r.ok ? r.json() : null).catch(() => null),
+          fetch(`${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/weekly-schedules?batchId=${encodeURIComponent(batchId)}&startDate=2026-04-01&endDate=2027-04-30&page=1`, { headers: getPwRequestHeaders(token), signal: AbortSignal.timeout(9000) }).then(r => r.ok ? r.json() : null).catch(() => null),
+          fetch(`${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/weekly-schedules?batchId=${encodeURIComponent(batchId)}&startDate=2026-04-01&endDate=2027-04-30&page=2`, { headers: getPwRequestHeaders(token), signal: AbortSignal.timeout(9000) }).then(r => r.ok ? r.json() : null).catch(() => null),
+          fetch(`${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/weekly-schedules?batchId=${encodeURIComponent(batchId)}&startDate=2026-04-01&endDate=2027-04-30&page=3`, { headers: getPwRequestHeaders(token), signal: AbortSignal.timeout(9000) }).then(r => r.ok ? r.json() : null).catch(() => null),
           fetch(`${PW_OFFICIAL_API}/v3/public/batch-service/batch-subject-schedules/${encodeURIComponent(batchId)}/free-schedule`, { headers: { "client-id": "5eb393ee95fab7468a79d189", "client-type": "WEB" }, signal: AbortSignal.timeout(9000) }).then(r => r.ok ? r.json() : null).catch(() => null)
         ];
         const schedResults = await Promise.all(schedPromises);
@@ -879,7 +879,7 @@ async function fetchSubjectData(batchId, remoteSubject, token) {
     try {
       const p1Res = await fetch(
         `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(primaryId)}/topics?page=1`,
-        { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) }
+        { headers: getPwRequestHeaders(token), signal: AbortSignal.timeout(8000) }
       ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }));
 
       if (Array.isArray(p1Res.data)) rawTopics = [...p1Res.data];
@@ -887,7 +887,7 @@ async function fetchSubjectData(batchId, remoteSubject, token) {
       if (rawTopics.length === 0 && altId) {
         const altRes = await fetch(
           `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(altId)}/topics?page=1`,
-          { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) }
+          { headers: getPwRequestHeaders(token), signal: AbortSignal.timeout(8000) }
         ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }));
         if (Array.isArray(altRes.data) && altRes.data.length > 0) {
           rawTopics = altRes.data;
@@ -898,7 +898,7 @@ async function fetchSubjectData(batchId, remoteSubject, token) {
         const activeId = rawTopics.length > 0 && altId && p1Res.data?.length === 0 ? altId : primaryId;
         const p2Res = await fetch(
           `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/subject/${encodeURIComponent(activeId)}/topics?page=2`,
-          { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) }
+          { headers: getPwRequestHeaders(token), signal: AbortSignal.timeout(8000) }
         ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }));
         if (Array.isArray(p2Res.data) && p2Res.data.length > 0) {
           rawTopics.push(...p2Res.data);
@@ -1134,7 +1134,7 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
             chunk.map(page =>
               fetch(
                 `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/weekly-schedules?batchId=${encodeURIComponent(batchId)}&startDate=${encodeURIComponent(sDate)}&endDate=${encodeURIComponent(eDate)}&page=${page}`,
-                { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(9000) }
+                { headers: getPwRequestHeaders(token), signal: AbortSignal.timeout(9000) }
               ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }))
             )
           );
@@ -1153,7 +1153,7 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
           try {
             const dateRes = await fetch(
               `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/weekly-schedules?batchId=${encodeURIComponent(batchId)}&startDate=${encodeURIComponent(date)}&endDate=${encodeURIComponent(date)}&page=1`,
-              { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(6000) }
+              { headers: getPwRequestHeaders(token), signal: AbortSignal.timeout(6000) }
             ).then(r => r.ok ? r.json() : null).catch(() => null);
             if (dateRes && Array.isArray(dateRes.data) && dateRes.data.length > 0) {
               rawItems.push(...dateRes.data);
@@ -1172,7 +1172,7 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
         if (altToken && altToken !== token) {
           const retryRes = await fetch(
             `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/weekly-schedules?batchId=${encodeURIComponent(batchId)}&startDate=${encodeURIComponent(sDate)}&endDate=${encodeURIComponent(eDate)}&page=1`,
-            { headers: { ...PW_HEADERS, Authorization: `Bearer ${altToken}` }, signal: AbortSignal.timeout(8000) }
+            { headers: getPwRequestHeaders(altToken), signal: AbortSignal.timeout(8000) }
           ).then(r => r.ok ? r.json() : null).catch(() => null);
           if (retryRes && Array.isArray(retryRes.data) && retryRes.data.length > 0) {
             rawItems.push(...retryRes.data);
@@ -1188,7 +1188,7 @@ async function fetchPwSchedule(batchId, date, month, startDate, endDate) {
         const pagePromises = [1, 2, 3].map(page =>
           fetch(
             `${PW_DETAILS_ORIGIN}/api/v2/batches/${encodeURIComponent(batchId)}/weekly-schedules?batchId=${encodeURIComponent(batchId)}&page=${page}`,
-            { headers: { ...PW_HEADERS, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(9000) }
+            { headers: getPwRequestHeaders(token), signal: AbortSignal.timeout(9000) }
           ).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }))
         );
         const results = await Promise.all(pagePromises);
@@ -2331,36 +2331,15 @@ export default {
         const batchId = "698ad3519549b300a5e1cc6a";
         const subjectId = "69b5698ee506a608ee297ed1";
         const chapterId = "69dc843271d06abbf386976d";
-        
-        // Diagnostic 1: Weekly schedules fetch
-        const schedUrl = `${PW_DETAILS_ORIGIN}/api/v2/batches/${batchId}/weekly-schedules?batchId=${batchId}&startDate=2026-09-01&endDate=2026-09-30&page=1`;
-        const schedRes = await fetch(schedUrl, {
-          headers: getPwRequestHeaders(token),
-          signal: AbortSignal.timeout(6000)
-        }).then(async r => ({ status: r.status, ok: r.ok, textLen: (await r.text()).length })).catch(e => ({ error: e.message }));
-
-        // Diagnostic 2: Contents fetch
-        const contUrl = `${PW_DETAILS_ORIGIN}/api/v2/batches/${batchId}/subject/${subjectId}/contents?page=1&contentType=videos&tag=${chapterId}`;
-        const contRes = await fetch(contUrl, {
-          headers: getPwRequestHeaders(token),
-          signal: AbortSignal.timeout(6000)
-        }).then(async r => ({ status: r.status, ok: r.ok, textLen: (await r.text()).length })).catch(e => ({ error: e.message }));
-
-        // Diagnostic 3: Full fetchChapterContents call
-        let chapRes = null;
-        try {
-          chapRes = await fetchChapterContents(batchId, subjectId, chapterId, token, true, "Circular Motion");
-        } catch (e) {
-          chapRes = { error: e.message, stack: e.stack };
-        }
+        const chapRes = await fetchChapterContents(batchId, subjectId, chapterId, token, true, "Circular Motion");
 
         return jsonResponse({
           tokenLen: token ? token.length : 0,
           tokenPrefix: token ? token.slice(0, 20) : "",
-          schedRes,
-          contRes,
-          chapLecturesCount: chapRes?.lectures?.length,
-          chapTotalLectures: chapRes?.totalLectures,
+          chapLecturesCount: chapRes?.lectures?.length || 0,
+          chapTotalLectures: chapRes?.totalLectures || 0,
+          chapTotalNotes: chapRes?.totalNotes || 0,
+          chapTotalDpps: chapRes?.totalDpps || 0,
           firstLecture: chapRes?.lectures?.[0]?.title || null
         });
       } catch (err) {
